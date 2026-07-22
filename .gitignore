@@ -7,3 +7,39 @@ scene_state.json
 posture_debug.log
 __pycache__/
 *.tmp
+RE
+# --- Model weights / binaries (large, auto-downloaded or generated locally) ---
+*.pt
+*.onnx
+*.tar.bz2
+*.pkl
+*.wav
+*.mp3
+ 
+# --- Personal / biometric data (privacy - never commit) ---
+setup/known_faces/
+**/known_faces/
+known_encodings.pkl
+ 
+# --- Runtime-generated files (regenerated automatically, not source) ---
+scene_state.json
+posture_debug.log
+*.tmp
+**/tmp*.tmp
+ 
+# --- Python caches / environments ---
+__pycache__/
+*.pyc
+jd_env/
+venv/
+.venv/
+ 
+# --- One-off exploration/testing scripts, not part of the real system ---
+shared/diagnostics/
+ 
+# --- Editor/OS junk ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+ 

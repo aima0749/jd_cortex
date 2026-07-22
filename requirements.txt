@@ -1,0 +1,18 @@
+# Core vision pipeline
+opencv-python
+ultralytics
+face_recognition
+numpy
+
+# NOTE: torch is a dependency of ultralytics/face_recognition, but for GPU
+# (CUDA) support you must install it separately with the correct index URL
+# BEFORE installing the rest of this file, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# (check https://pytorch.org for the exact command matching your CUDA version)
+
+# Gemini API calls (plain HTTP, no SDK needed)
+requests
+
+# Local speech-to-text (Parakeet via sherpa-onnx)
+sherpa-onnx
+sounddevice
