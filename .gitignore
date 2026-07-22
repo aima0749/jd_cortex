@@ -1,0 +1,9 @@
+﻿*.pt
+*.onnx
+*.tar.bz2
+*.pkl
+*.wav
+scene_state.json
+posture_debug.log
+__pycache__/
+*.tmp
