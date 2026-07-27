@@ -78,7 +78,7 @@ def _call_gemini(prompt):
     return None
 
 
-def understand(text, describe_all_known, scene_summary=None):
+def understand(text, describe_all_known, scene_summary=None, history_block=None):
     """
     Single Gemini call that returns BOTH:
       - a short natural spoken reply (JD 'answering intelligently')
@@ -87,17 +87,19 @@ def understand(text, describe_all_known, scene_summary=None):
         any match against the real known-safe lists before executing it.
 
     scene_summary: optional plain-English description of what JD's vision
-    pipeline currently sees (from scene_context.get_scene_summary()) - used
-    as extra context, e.g. so "sit down" can get a different reply if JD
-    can see the person is already sitting.
+    pipeline currently sees (from scene_context.get_scene_summary()).
+
+    history_block: optional short-term rolling memory of the last few
+    exchanges (from conversation_memory.py) - auto-resets periodically so
+    prompt size never keeps growing across a long session.
 
     Returns (reply_text_or_None, (category, name)_or_None).
     """
     vision_block = f'\nWhat JD currently sees: {scene_summary}\n' if scene_summary else ""
+    history_text = f'\n{history_block}\n' if history_block else ""
 
     prompt = f"""You are JD, a friendly robot. A person just said to you: "{text}"
-{vision_block}
-
+{vision_block}{history_text}
 {describe_all_known()}
 
 Respond in EXACTLY this two-line format, nothing else:

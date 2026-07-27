@@ -20,7 +20,7 @@ def speak(arc, text):
     if not text:
         return
     safe_text = _escape_for_ezscript(text)
-    command = f'SayEZBWait("{safe_text}")'
+    command = f'SayWait("{safe_text}")'
     try:
         response = arc.send_and_receive(command, timeout=20.0)
         if not response:

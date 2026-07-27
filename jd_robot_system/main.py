@@ -1,40 +1,10 @@
-﻿"""
-JD Command & Act - main entry point.
-
-Flow per command:
-  1. Get text - typed, or spoken via local Parakeet (voice_parakeet.py),
-     using whatever mic Windows has set as default (laptop or headphone).
-  2. Check for an exact literal action name match first (instant, free,
-     no Gemini call needed).
-  3. Otherwise, ask Gemini for a spoken reply AND an optional action
-     match, with scene context if available - Gemini can use judgment
-     for creative phrasing, but can never invent an action name.
-  4. Speak the reply via JD's onboard speaker.
-  5. If an action was matched, validate it against the real known-safe
-     lists (MOVEMENTS/SOUNDS/LIGHTS from known_actions.py) before ever
-     sending anything to the robot - Gemini's opinion alone is never
-     enough.
-  6. Execute the validated action, then return JD to standing/neutral.
-
-Requires (same folder): known_actions.py, config.py, gemini_brain.py,
-voice_parakeet.py, tts.py, arc_connection.py. scene_context.py is
-optional - if missing, JD just runs without vision-based context.
-
-DEBUG PRINTS: this version has extra [DEBUG] lines around both the
-action-execution path and the TTS/speak path, added specifically to
-figure out why SayEZBWait sometimes produces no audible sound even
-though ARC responds without error. Once TTS is confirmed working
-reliably, these can be removed or commented out.
-
-Run:
-    python main.py
-"""
-import time
+﻿import time
 
 import config
 import gemini_brain
 import voice_parakeet
 import tts
+import conversation_memory
 from arc_connection import ARCConnection
 from known_actions import (
     MOVEMENTS, SOUNDS, LIGHTS,
@@ -42,14 +12,14 @@ from known_actions import (
     describe_all_known,
 )
 
-# scene_context is optional - don't crash the whole system if it's not
-# built yet or not present in this folder.
 try:
     import scene_context
     HAS_SCENE_CONTEXT = True
 except ImportError:
     HAS_SCENE_CONTEXT = False
     print("(scene_context.py not found - running without vision context)\n")
+
+FORGET_PHRASES = ["forget this conversation", "forget everything", "clear your memory", "start fresh"]
 
 
 def get_scene_summary_safe():
@@ -63,8 +33,6 @@ def get_scene_summary_safe():
 
 
 def local_match(text):
-    """Instant, free match against a real action's exact name - no Gemini
-    call needed for literal commands like 'do the Headstand'."""
     text_lower = text.lower()
     for movement in MOVEMENTS:
         if movement.lower() in text_lower:
@@ -80,10 +48,6 @@ def local_match(text):
 
 
 def validate(category, name):
-    """Final safety check - even a Gemini match gets re-checked against
-    the real list before anything is sent to the robot. Case-insensitive
-    on the name so a trivial casing difference from Gemini doesn't wrongly
-    reject an otherwise-real match."""
     if category == "movement":
         return next((m for m in MOVEMENTS if m.lower() == str(name).lower()), None)
     if category == "sound":
@@ -113,7 +77,7 @@ def execute(arc, category, name):
 def run_action(arc, category, name):
     success = execute(arc, category, name)
     if success and category == "movement":
-        time.sleep(2.5)  # let the movement play out before resetting
+        time.sleep(2.5)
         print("  Returning to standing...")
         return_to_standing(arc.sock)
         time.sleep(1.5)
@@ -121,10 +85,6 @@ def run_action(arc, category, name):
 
 
 def speak_debug(arc, text):
-    """Wraps tts.speak() with debug prints so we can see whether the call
-    is reached, and whether it completes, times out, or errors - since
-    tts.speak() itself stays silent on a 'successful but no real audio'
-    response from ARC."""
     print("  [DEBUG] Calling tts.speak() now...")
     tts.speak(arc, text)
     print("  [DEBUG] tts.speak() call finished.")
@@ -132,6 +92,15 @@ def speak_debug(arc, text):
 
 def process_command(arc, text):
     print(f"\n>> Command: \"{text}\"")
+
+    text_lower = text.lower()
+    if any(phrase in text_lower for phrase in FORGET_PHRASES):
+        conversation_memory.clear()
+        spoken_line = "Okay, I've cleared what I remember. Starting fresh!"
+        print(f"  JD says: {spoken_line}")
+        speak_debug(arc, spoken_line)
+        print("  Done.\n")
+        return
 
     local_result = local_match(text)
     if local_result:
@@ -148,11 +117,13 @@ def process_command(arc, text):
         return
 
     scene_summary = get_scene_summary_safe()
-    reply, action = gemini_brain.understand(text, describe_all_known, scene_summary)
+    history_block = conversation_memory.get_history_block()
+    reply, action = gemini_brain.understand(text, describe_all_known, scene_summary, history_block)
 
     if reply:
         print(f"  JD says: {reply}")
         speak_debug(arc, reply)
+        conversation_memory.add_turn(text, reply)
     else:
         print("  (no spoken reply generated)")
 
