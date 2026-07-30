@@ -15,6 +15,8 @@ import numpy as np
 import sounddevice as sd
 import sherpa_onnx
 
+import tts  
+
 MODEL_DIR = "../voice_model/parakeet"
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = 0.01    # raise if it cuts off too early in a noisy room
@@ -69,9 +71,16 @@ def _record_until_silence():
     return np.concatenate(chunks, axis=0).flatten()
 
 
+
 def listen_for_command():
     """Push-to-talk: waits for you to press Enter, THEN records until
     silence and transcribes. Returns '' if only silence was heard."""
+    if tts.speaking_flag.is_set():
+        print("(JD is still speaking - waiting for it to finish...)")
+        while tts.speaking_flag.is_set():
+            pass  # brief spin-wait until speaking clears
+        print("JD finished speaking. Now:")
+
     input("Press Enter, then speak your command...")
     audio = _record_until_silence()
     if np.abs(audio).max() < SILENCE_THRESHOLD:

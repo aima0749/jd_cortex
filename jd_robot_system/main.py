@@ -1,10 +1,12 @@
 ﻿import time
+import threading
 
 import config
 import gemini_brain
 import voice_parakeet
 import tts
 import conversation_memory
+import speech_queue
 from arc_connection import ARCConnection
 from known_actions import (
     MOVEMENTS, SOUNDS, LIGHTS,
@@ -20,6 +22,8 @@ except ImportError:
     print("(scene_context.py not found - running without vision context)\n")
 
 FORGET_PHRASES = ["forget this conversation", "forget everything", "clear your memory", "start fresh"]
+
+ALERT_CHECK_INTERVAL = 1.0  # seconds between checks for queued surveillance alerts
 
 
 def get_scene_summary_safe():
@@ -139,6 +143,20 @@ def process_command(arc, text):
     print("  Done.\n")
 
 
+def alert_checker_loop(arc, stop_event):
+    """Runs in a background thread: periodically checks for speech
+    requests queued by surveillance_watcher.py (or any other process)
+    and speaks them through THIS process's single ARC connection - the
+    only one that ever talks to ARC. tts.speak()'s internal thread lock
+    keeps this from colliding with the main thread speaking at the same
+    moment."""
+    while not stop_event.is_set():
+        messages = speech_queue.pop_pending_messages()
+        for message in messages:
+            print(f"\n  [ALERT] Speaking queued surveillance message: {message}")
+            tts.speak(arc, message)
+        stop_event.wait(ALERT_CHECK_INTERVAL)
+
 def main():
     arc = ARCConnection()
     if not arc.connect():
@@ -149,6 +167,7 @@ def main():
         print("conversational replies and Gemini-based matching will fail until")
         print("you set a real key from https://aistudio.google.com/apikey\n")
 
+    # ASK MODE FIRST, before anything can start speaking
     mode = input("Input mode - (t)ype or (v)oice via mic [local Parakeet]? [t/v]: ").strip().lower()
     if mode == "v":
         print("Voice mode (local Parakeet, laptop/headphone mic - whichever")
@@ -157,6 +176,12 @@ def main():
     else:
         mode = "t"
         print("Type a command (or 'quit' to exit).\n")
+
+    # NOW start the background alert checker, only after mode is chosen
+    stop_event = threading.Event()
+    alert_thread = threading.Thread(target=alert_checker_loop, args=(arc, stop_event), daemon=True)
+    alert_thread.start()
+    print("(Background alert checker started - will speak any queued surveillance alerts.)\n")
 
     while True:
         if mode == "v":
@@ -172,6 +197,7 @@ def main():
             break
         process_command(arc, text)
 
+    stop_event.set()
     arc.disconnect()
 
 
