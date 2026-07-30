@@ -1,8 +1,10 @@
-﻿import time
+﻿import os
 import threading
+import time
 
 import config
 import gemini_brain
+import panel_server
 import voice_parakeet
 import tts
 import conversation_memory
@@ -21,6 +23,13 @@ except ImportError:
     HAS_SCENE_CONTEXT = False
     print("(scene_context.py not found - running without vision context)\n")
 
+try:
+    import memory_context
+    HAS_MEMORY_CONTEXT = True
+except ImportError:
+    HAS_MEMORY_CONTEXT = False
+    print("(memory_context.py not found - running without the witness diary)\n")
+
 FORGET_PHRASES = ["forget this conversation", "forget everything", "clear your memory", "start fresh"]
 
 ALERT_CHECK_INTERVAL = 1.0  # seconds between checks for queued surveillance alerts
@@ -33,6 +42,16 @@ def get_scene_summary_safe():
         return scene_context.get_scene_summary()
     except Exception as e:
         print(f"  [scene_context] failed to get summary: {e}")
+        return None
+
+
+def get_memory_block_safe():
+    if not HAS_MEMORY_CONTEXT:
+        return None
+    try:
+        return memory_context.get_memory_block()
+    except Exception as e:
+        print(f"  [memory_context] failed to read diary: {e}")
         return None
 
 
@@ -104,7 +123,7 @@ def process_command(arc, text):
         print(f"  JD says: {spoken_line}")
         speak_debug(arc, spoken_line)
         print("  Done.\n")
-        return
+        return spoken_line
 
     local_result = local_match(text)
     if local_result:
@@ -114,19 +133,24 @@ def process_command(arc, text):
             spoken_line = f"Okay, {name}"
             print(f"  JD says: {spoken_line}")
             speak_debug(arc, spoken_line)
+            panel_server.set_event("doing: " + name)
             run_action(arc, category, name)
-        else:
-            print(f"  REJECTED at validation - '{name}' not confirmed safe. Nothing sent.")
+            print("  Done.\n")
+            return spoken_line
+        print(f"  REJECTED at validation - '{name}' not confirmed safe. Nothing sent.")
         print("  Done.\n")
-        return
+        return f"'{name}' didn't pass the safety check, so nothing was sent."
 
     scene_summary = get_scene_summary_safe()
+    memory_block = get_memory_block_safe()
     history_block = conversation_memory.get_history_block()
-    reply, action = gemini_brain.understand(text, describe_all_known, scene_summary, history_block)
+    reply, action = gemini_brain.understand(text, describe_all_known, scene_summary,
+                                            history_block, memory_block)
 
     if reply:
         print(f"  JD says: {reply}")
         speak_debug(arc, reply)
+        panel_server.set_event("JD: " + reply[:60])
         conversation_memory.add_turn(text, reply)
     else:
         print("  (no spoken reply generated)")
@@ -141,6 +165,7 @@ def process_command(arc, text):
             print(f"  Gemini suggested '{name}' but it's not on the safe list - ignoring, nothing sent.")
 
     print("  Done.\n")
+    return reply
 
 
 def alert_checker_loop(arc, stop_event):
@@ -182,6 +207,18 @@ def main():
     alert_thread = threading.Thread(target=alert_checker_loop, args=(arc, stop_event), daemon=True)
     alert_thread.start()
     print("(Background alert checker started - will speak any queued surveillance alerts.)\n")
+
+    # The ARC panel (the Memory plugin) talks to this same brain over
+    # 127.0.0.1:5005. One lock serialises panel requests with everything
+    # else so two answers can never interleave on the one ARC connection.
+    brain_lock = threading.Lock()
+
+    def panel_respond(text):
+        with brain_lock:
+            return process_command(arc, text)
+
+    panel_server.register(panel_respond, shutdown_fn=lambda: os._exit(0))
+    panel_server.start()
 
     while True:
         if mode == "v":

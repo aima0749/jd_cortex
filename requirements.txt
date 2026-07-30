@@ -16,3 +16,7 @@ requests
 # Local speech-to-text (Parakeet via sherpa-onnx)
 sherpa-onnx
 sounddevice
+
+# Hand-gesture control from the ARC panel (newer versions removed
+# the solutions API this uses)
+mediapipe==0.10.21

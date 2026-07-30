@@ -42,4 +42,11 @@ shared/diagnostics/
 .idea/
 Thumbs.db
 .DS_Store
- 
+ # --- Witness diary (runtime data, personal observations - never commit) ---
+memory/witness_diary.sqlite3*
+
+# --- Cross-process speech queue (runtime, regenerated constantly) ---
+speech_queue.json
+
+# --- Live camera frames from the ARC plugin (runtime only) ---
+bridge/

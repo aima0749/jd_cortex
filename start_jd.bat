@@ -9,6 +9,9 @@ set ROOT=C:\Users\PC\Documents\JD_robot
 echo Starting vision pipeline...
 start "JD Vision Pipeline" cmd /k "cd /d %ROOT%\jd_env\Scripts && call activate && cd /d %ROOT%\vision_pipeline && python 01_full_pipeline.py"
 
+echo Starting witness recorder...
+start "JD Witness Recorder" cmd /k "cd /d %ROOT%\jd_env\Scripts && call activate && cd /d %ROOT% && python memory\witness_recorder.py"
+
 REM give the vision pipeline a few seconds to load its models and start
 REM writing scene_state.json before the command system starts checking it
 timeout /t 8 /nobreak

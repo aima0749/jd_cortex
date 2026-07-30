@@ -1,10 +1,10 @@
-"""
+﻿"""
 Step: Face enrollment.
 
 Put one clear photo per person in the known_faces/ folder, named after
 them, e.g.:
-    known_faces/aima.jpg
-    known_faces/omar.jpg
+    known_faces/name1.jpg
+    known_faces/name2.jpg
 
 Run this script whenever you add/change photos in that folder. It scans
 every image, computes a face encoding (a 128-number "fingerprint" of the
@@ -31,7 +31,7 @@ OUTPUT_FILE = "known_encodings.pkl"
 def main():
     if not os.path.isdir(KNOWN_FACES_DIR):
         print(f"ERROR: '{KNOWN_FACES_DIR}' folder not found. Create it and "
-              f"add photos named like aima.jpg, omar.jpg, etc.")
+              f"add photos named like name1.jpg, name2.jpg, etc.")
         return
 
     names = []
@@ -47,7 +47,7 @@ def main():
     print(f"Found {len(files)} image(s). Processing...")
 
     for filename in files:
-        name = os.path.splitext(filename)[0]  # "aima.jpg" -> "aima"
+        name = os.path.splitext(filename)[0]  # "name1.jpg" -> "name1"
         path = os.path.join(KNOWN_FACES_DIR, filename)
 
         image = face_recognition.load_image_file(path)

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<PluginV1XML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <FRIENDLY_NAME>Memory</FRIENDLY_NAME>
+  <DLL_FILENAME>Memory.dll</DLL_FILENAME>
+  <AUTHOR_NAME>JD Cortex</AUTHOR_NAME>
+  <LICENSE_URL>https://synthiam.com/Software/plugin-license.aspx</LICENSE_URL>
+  <PLUGIN_GUID>1af60b66-316b-4872-bd54-29ff20da3e6f</PLUGIN_GUID>
+  <CATEGORY_TYPE>Beta</CATEGORY_TYPE>
+  <DESCRIPTION>Watch-and-remember panel for JD: live status, event diary Q&amp;A, hold-to-talk, and gesture control</DESCRIPTION>
+  <ALLOW_MULTIPLE_INSTANCES>false</ALLOW_MULTIPLE_INSTANCES>
+  <VersionRelease>0</VersionRelease>
+</PluginV1XML>

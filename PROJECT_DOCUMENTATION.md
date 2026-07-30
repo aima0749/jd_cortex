@@ -1,4 +1,4 @@
-# ProjectMoveMint Documentation
+﻿# ProjectMoveMint Documentation
 
 This document describes the features and purpose of the ProjectMoveMint robot control project in this folder.
 
@@ -59,7 +59,27 @@ It is designed to:
 - `vision_pipeline/00_baseline_gpu_test.py` checks whether the GPU environment is ready.
 - Vision support is optional and may require a GPU and the appropriate dependencies.
 
-### 8. Setup and diagnostics
+### 8. Witness memory
+
+- `memory/witness_recorder.py` runs alongside the vision pipeline and turns raw sightings from `scene_state.json` into debounced diary events (arrivals, departures with duration, held objects, furniture, objects coming into view).
+- Events are stored in `memory/witness_store.py`'s SQLite diary (`memory/witness_diary.sqlite3`, WAL mode, safe across processes).
+- `jd_robot_system/memory_context.py` formats the diary into a compact text block that `main.py` adds to the single Gemini prompt, so the same brain that handles commands also answers questions about what JD has seen. There is no second answering path.
+- With `JD_ANNOUNCE=on` the recorder queues spoken arrival announcements through the existing speech queue; it never opens its own ARC connection.
+
+### 9. ARC panel (Memory plugin)
+
+The ARC custom plugin in `memory/plugin/` gives one clear screen:
+what JD sees, a box to ask or command anything, clickable example
+questions, hold-to-talk speech, and a hand-gesture switch. It connects
+to `main.py` on port 5005 (`jd_robot_system/panel_server.py`), so panel
+input flows through the identical path as typed and spoken commands.
+`jd_robot_system/panel_listen.py` records while the button is held and
+transcribes offline with the shared Parakeet model;
+`memory/gesture_control.py` runs as its own process, reading the frames
+the plugin writes and sending Auto Position actions straight to ARC,
+with a safety stop if the hand disappears mid-walk.
+
+### 10. Setup and diagnostics
 
 - `setup/` contains initial setup helpers including face enrollment and GPU checks.
 - `shared/diagnostics/` contains tools for verifying ARC connectivity and robot communication.

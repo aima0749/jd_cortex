@@ -1,14 +1,16 @@
 ﻿"""
 Gemini integration: understands natural language commands, returns a
 spoken reply and (optionally) a matched action. Handles Google retiring
-model names via a fallback list, and transient network errors via
-retry-with-backoff, so a single deprecated model or network blip doesn't
-take down the whole system.
+model names via a fallback list, transient network errors via
+retry-with-backoff, and the free tier's 20-requests-per-day-per-model
+limit by rotating through every configured API key before giving up on
+a model - so neither a deprecated model, a network blip, nor one
+exhausted key takes down the whole system mid-demo.
 """
 import time
 import requests
 from config import (
-    GEMINI_API_KEY, GEMINI_MODEL_CANDIDATES, GEMINI_TIMEOUT,
+    GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MODEL_CANDIDATES, GEMINI_TIMEOUT,
     GEMINI_MAX_RETRIES, GEMINI_RETRY_DELAY,
 )
 
@@ -35,13 +37,14 @@ def list_available_models():
         print(f"ListModels failed: {e}")
 
 
-def _call_once(model_name, prompt):
-    """Single attempt at one model. Returns (result_text, error_kind) where
-    error_kind is None (success), 'not_found' (try next model), or
-    'other' (network/timeout/etc - worth retrying same model)."""
+def _call_once(model_name, api_key, key_label, prompt):
+    """Single attempt at one model with one key. Returns (result_text,
+    error_kind): None on success, 'not_found' (model gone - next model),
+    'quota' (this key is out for this model - next key, retrying won't
+    help), or 'other' (network/timeout/etc - worth one retry)."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+        f"{model_name}:generateContent?key={api_key}"
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
@@ -53,8 +56,11 @@ def _call_once(model_name, prompt):
     if response.status_code == 404:
         print(f"  [Gemini] {model_name} unavailable (404) - trying next model...")
         return None, "not_found"
+    if response.status_code == 429:
+        print(f"  [Gemini] quota exhausted on {model_name} with {key_label} - trying next key...")
+        return None, "quota"
     if not response.ok:
-        print(f"  [Gemini] HTTP {response.status_code} on {model_name}: {response.text}")
+        print(f"  [Gemini] HTTP {response.status_code} on {model_name} ({key_label}): {response.text}")
         return None, "other"
 
     try:
@@ -66,19 +72,32 @@ def _call_once(model_name, prompt):
 
 
 def _call_gemini(prompt):
+    """Walks the model ladder, and inside each rung walks every configured
+    key - the 20-per-day free-tier limit is per key per model, so with two
+    keys and three models a session gets six pools to drain instead of one."""
     for model_name in GEMINI_MODEL_CANDIDATES:
-        for attempt in range(1, GEMINI_MAX_RETRIES + 1):
-            result_text, error_kind = _call_once(model_name, prompt)
-            if error_kind is None:
-                return result_text
-            if error_kind == "not_found":
-                break  # no point retrying a model that doesn't exist - move to next model
-            print(f"  [Gemini] retrying {model_name} (attempt {attempt}/{GEMINI_MAX_RETRIES})...")
-            time.sleep(GEMINI_RETRY_DELAY)
+        model_missing = False
+        for key_index, api_key in enumerate(GEMINI_API_KEYS):
+            key_label = f"key {key_index + 1}/{len(GEMINI_API_KEYS)}"
+            for attempt in range(1, GEMINI_MAX_RETRIES + 1):
+                result_text, error_kind = _call_once(model_name, api_key, key_label, prompt)
+                if error_kind is None:
+                    return result_text
+                if error_kind == "not_found":
+                    model_missing = True  # model names are global - skip remaining keys too
+                    break
+                if error_kind == "quota":
+                    break
+                if attempt < GEMINI_MAX_RETRIES:
+                    print(f"  [Gemini] retrying {model_name} (attempt {attempt + 1}/{GEMINI_MAX_RETRIES})...")
+                    time.sleep(GEMINI_RETRY_DELAY)
+            if model_missing:
+                break
     return None
 
 
-def understand(text, describe_all_known, scene_summary=None, history_block=None):
+def understand(text, describe_all_known, scene_summary=None, history_block=None,
+               memory_block=None):
     """
     Single Gemini call that returns BOTH:
       - a short natural spoken reply (JD 'answering intelligently')
@@ -89,6 +108,11 @@ def understand(text, describe_all_known, scene_summary=None, history_block=None)
     scene_summary: optional plain-English description of what JD's vision
     pipeline currently sees (from scene_context.get_scene_summary()).
 
+    memory_block: optional witness diary of who and what JD has seen
+    earlier (from memory_context.get_memory_block()). This is what lets
+    the SAME call answer "who did you see today?" - there is no separate
+    memory-answering path anywhere.
+
     history_block: optional short-term rolling memory of the last few
     exchanges (from conversation_memory.py) - auto-resets periodically so
     prompt size never keeps growing across a long session.
@@ -96,10 +120,19 @@ def understand(text, describe_all_known, scene_summary=None, history_block=None)
     Returns (reply_text_or_None, (category, name)_or_None).
     """
     vision_block = f'\nWhat JD currently sees: {scene_summary}\n' if scene_summary else ""
+    memory_text = ""
+    if memory_block:
+        memory_text = (
+            f"\n{memory_block}\n"
+            "When the person asks who or what JD has seen, met, noticed, or\n"
+            "remembers, answer from this witness diary, including the times it\n"
+            "gives. If the diary doesn't show something, say JD hasn't seen it -\n"
+            "never invent a sighting.\n"
+        )
     history_text = f'\n{history_block}\n' if history_block else ""
 
     prompt = f"""You are JD, a friendly robot. A person just said to you: "{text}"
-{vision_block}{history_text}
+{vision_block}{memory_text}{history_text}
 {describe_all_known()}
 
 Respond in EXACTLY this two-line format, nothing else:

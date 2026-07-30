@@ -15,7 +15,24 @@ CONNECT_TIMEOUT = 5.0
 # --- Gemini ---
 # Get a free key at https://aistudio.google.com/apikey
 # MUST be a real key - the placeholder below will fail every Gemini call.
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "PUT_YOUR_KEY_HERE")
+#
+# The free tier allows only ~20 requests per day per model per project,
+# which one testing session can burn through. Setting GEMINI_API_KEY_2
+# (and/or GEMINI_API_KEY_3) gives gemini_brain extra keys to rotate
+# to when one hits its quota. With one key set, behavior is unchanged.
+
+
+def _collect_api_keys():
+    keys = []
+    for var in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"):
+        value = os.environ.get(var, "").strip()
+        if value and value != "PUT_YOUR_KEY_HERE" and value not in keys:
+            keys.append(value)
+    return keys or ["PUT_YOUR_KEY_HERE"]
+
+
+GEMINI_API_KEYS = _collect_api_keys()
+GEMINI_API_KEY = GEMINI_API_KEYS[0]
 
 # Tried in order - if one gets deprecated/restricted (HTTP 404), the next
 # is tried automatically. If ALL of them ever fail, run:

@@ -11,13 +11,18 @@ continuously-open mic picks up JD's own spoken TTS replies (self-feedback)
 or nearby bystanders talking, and misfires commands from either. Requiring
 an explicit trigger each time eliminates both problems entirely.
 """
+import os
+
 import numpy as np
 import sounddevice as sd
 import sherpa_onnx
 
-import tts  
+import tts
 
-MODEL_DIR = "../voice_model/parakeet"
+# Anchored to this file's folder so the model is found no matter which
+# directory main.py was launched from.
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "voice_model", "parakeet")
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = 0.01    # raise if it cuts off too early in a noisy room
 SILENCE_DURATION = 1.2      # seconds of quiet before we stop recording

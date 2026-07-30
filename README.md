@@ -18,6 +18,7 @@ This folder contains:
 
 - `jd_robot_system/` - the main robot control code.
 - `vision_pipeline/` - optional vision processing and scene state output.
+- `memory/` - the witness memory: JD's persistent diary of who and what it has seen.
 - `setup/` - setup helpers like GPU checks and face enrollment.
 - `shared/` - shared utilities and diagnostics tools.
 - `start_jd.bat` - a Windows helper script to launch the main program.
@@ -25,6 +26,46 @@ This folder contains:
 The main program is `jd_robot_system/main.py`. It can accept typed commands or voice commands from ARC. It uses `jd_robot_system/known_actions.py` to know what actions are safe for the robot.
 
 `jd_robot_system/config.py` contains the settings. You must update it with your ARC host, port, and your Gemini API key before using the system.
+
+## Witness memory (who and what JD has seen)
+
+`memory/witness_recorder.py` runs as its own process next to the vision
+pipeline. It reads `vision_pipeline/scene_state.json` and writes debounced
+events (arrivals, departures with duration, held objects, furniture,
+objects coming into view) to a small SQLite diary at
+`memory/witness_diary.sqlite3`.
+
+There is only one brain: `main.py` injects a compact diary block into the
+same Gemini prompt that already handles conversation and action matching,
+so questions like "who did you see today?", "when did you last see name1?"
+or "what was name2 holding?" are answered by that one call. There is no
+separate memory-answering path. If neither the recorder nor the diary
+exists, the system runs exactly as before.
+
+Run it in its own terminal (order relative to the vision pipeline does not
+matter - it waits):
+
+```powershell
+python memory\witness_recorder.py
+```
+
+Self-check without a camera or robot:
+
+```powershell
+python memory\witness_recorder.py selftest
+```
+
+Environment variables:
+
+- `JD_ANNOUNCE` - `on` makes JD announce arrivals out loud (through
+  main.py's speaker, via the speech queue). Default `off`: JD remembers
+  silently and only speaks when spoken to.
+- `JD_SPEAK_TARGET` - `ezb` (default) speaks through JD's chest speaker
+  with `SayEZBWait()`; `pc` uses the computer's speakers with `SayWait()`.
+- `GEMINI_API_KEY_2` / `GEMINI_API_KEY_3` - optional extra Gemini keys;
+  the brain rotates to the next key when one hits the free tier's daily
+  quota.
+- `JD_DIARY_KEEP_DAYS` - diary retention, default 14 days.
 
 ## What works in this folder
 
@@ -82,6 +123,30 @@ The main program is `jd_robot_system/main.py`. It can accept typed commands or v
 
 - If vision does not work, run `python vision_pipeline/00_baseline_gpu_test.py`.
 - If you need to update face data, run `python setup/enroll_faces.py`.
+
+## The ARC panel (Memory plugin)
+
+`memory/plugin/` is the ARC custom plugin - JD's control panel
+inside ARC. One screen shows what JD sees right now, answers typed or spoken
+questions, and switches hand-gesture control on and off. It talks to
+`main.py` over `127.0.0.1:5005`, so everything it does goes through the
+same single brain as typed and voice commands.
+
+Build it once: open `memory/plugin/MY_PROJECT_NAME.csproj` in Visual
+Studio (ARC plugin SDK referenced), build, and the DLL lands in ARC's
+plugin folder. In ARC, add the Memory skill to the project and click
+"Attach to JD's camera" after the Camera Device is started - that makes
+the plugin write live frames to `bridge/frame.jpg` for gesture control.
+
+The panel's dot turns green when `main.py` is running. For demos,
+run `main.py` in type mode and use the panel's hold-to-talk button - that
+way the panel owns the microphone and nothing else is listening.
+Hold-to-talk uses the same `voice_model/parakeet` folder as voice mode;
+set `JD_MIC_DEVICE` if Windows' default microphone is the wrong one
+(`python jd_robot_system\panel_listen.py devices` lists them). Gesture
+control additionally needs `pip install "mediapipe==0.10.21"` and, on
+hardware day, a check that the Auto Position walking action names at the
+top of `memory/gesture_control.py` match the ARC project.
 
 ## Notes
 

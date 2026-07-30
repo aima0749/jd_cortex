@@ -8,8 +8,14 @@ cross-process locking around two live sockets.
 """
 import json
 import os
+import tempfile
 
-QUEUE_PATH = "speech_queue.json"
+# Anchored to THIS file's folder, not the launch directory - main.py runs
+# from jd_robot_system/ while witness_recorder.py runs from the repo root,
+# and both must agree on the same queue file or requests silently go to a
+# file nobody reads.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+QUEUE_PATH = os.path.join(_BASE_DIR, "speech_queue.json")
 
 
 def request_speech(text):
@@ -26,9 +32,14 @@ def request_speech(text):
 
     messages.append(text)
 
+    # Temp-file-then-rename, same as the vision pipeline's scene_state
+    # write, so main.py can never read a half-written queue file.
     try:
-        with open(QUEUE_PATH, "w") as f:
-            json.dump(messages, f)
+        with tempfile.NamedTemporaryFile("w", dir=_BASE_DIR, delete=False,
+                                         suffix=".tmp") as tmp_f:
+            json.dump(messages, tmp_f)
+            tmp_path = tmp_f.name
+        os.replace(tmp_path, QUEUE_PATH)
     except OSError as e:
         print(f"  [speech_queue] failed to write request: {e}")
 
