@@ -78,6 +78,90 @@ def _call_gemini(prompt):
     return None
 
 
+def assess_alert(situation_description):
+    """
+    Given a short description of a triggered surveillance condition (who,
+    what, time of day), asks Gemini to judge how concerning it actually is
+    and produce an appropriate spoken alert line - or decide it's not
+    worth alerting about at all. Reuses the same model fallback/retry
+    infrastructure as understand().
+
+    Returns (should_alert: bool, spoken_line: str_or_None).
+    """
+    prompt = f"""You are JD, a home security-aware robot. A monitoring system just detected this situation:
+
+{situation_description}
+
+Judge how concerning this actually is, considering context like time of
+day and whether the person is known. Respond in EXACTLY this two-line
+format, nothing else:
+ALERT: <yes or no>
+LINE: <a short, natural spoken alert matching the urgency, or NONE if ALERT is no>
+
+Use judgment - a known person calmly holding a knife in a kitchen at a
+normal hour is NOT concerning and should not alert. An unknown person, or
+anyone holding something sharp late at night, IS concerning and should
+alert with appropriately urgent wording."""
+
+    result_text = _call_gemini(prompt)
+
+    if result_text is None:
+        # Gemini unavailable - default to alerting plainly rather than
+        # staying silent on a potentially real security event.
+        return True, "I detected something you should check on."
+
+    should_alert = False
+    spoken_line = None
+    for line in result_text.splitlines():
+        line = line.strip()
+        if line.startswith("ALERT:"):
+            should_alert = line[len("ALERT:"):].strip().lower().startswith("y")
+        elif line.startswith("LINE:"):
+            value = line[len("LINE:"):].strip()
+            spoken_line = None if value.upper() == "NONE" else value
+
+    return should_alert, spoken_line
+
+
+def ambient_comment(event_description, scene_summary=None):
+    """
+    Given a description of something that just changed in the scene, asks
+    Gemini whether a natural, non-annoying companion robot would say
+    something right now - or nothing, which should be the common case.
+    NOT safety-critical, so this fails silently (returns None) if
+    Gemini/network is unavailable, rather than forcing any fallback.
+
+    Returns a comment string, or None (meaning: say nothing this time).
+    """
+    scene_block = f"\nFull current scene: {scene_summary}\n" if scene_summary else ""
+
+    prompt = f"""You are JD, a friendly companion robot that notices things but
+does NOT narrate constantly - most of the time you should say NOTHING,
+only commenting when it's genuinely natural, the way a person in the
+room would occasionally remark on something without narrating every
+moment.
+
+Something just changed: {event_description}
+{scene_block}
+Respond in EXACTLY this format, nothing else:
+COMMENT: <a short, natural spoken remark, or exactly NONE if nothing is worth saying>
+
+Be conservative - routine, expected, or minor changes should get NONE.
+Only produce a real comment for things a normal person would actually
+remark on out loud."""
+
+    result_text = _call_gemini(prompt)
+    if result_text is None:
+        return None  # network/Gemini unavailable - just skip silently
+
+    for line in result_text.splitlines():
+        line = line.strip()
+        if line.startswith("COMMENT:"):
+            value = line[len("COMMENT:"):].strip()
+            return None if value.upper() == "NONE" else value
+    return None
+
+
 def understand(text, describe_all_known, scene_summary=None, history_block=None):
     """
     Single Gemini call that returns BOTH:
@@ -87,19 +171,19 @@ def understand(text, describe_all_known, scene_summary=None, history_block=None)
         any match against the real known-safe lists before executing it.
 
     scene_summary: optional plain-English description of what JD's vision
-    pipeline currently sees (from scene_context.get_scene_summary()).
-
-    history_block: optional short-term rolling memory of the last few
-    exchanges (from conversation_memory.py) - auto-resets periodically so
-    prompt size never keeps growing across a long session.
+    pipeline currently sees.
+    history_block: optional recent-conversation text from
+    conversation_memory.get_history_block(), giving Gemini short-term
+    memory of the last few exchanges this session.
 
     Returns (reply_text_or_None, (category, name)_or_None).
     """
     vision_block = f'\nWhat JD currently sees: {scene_summary}\n' if scene_summary else ""
-    history_text = f'\n{history_block}\n' if history_block else ""
+    memory_block = f'\n{history_block}\n' if history_block else ""
 
     prompt = f"""You are JD, a friendly robot. A person just said to you: "{text}"
-{vision_block}{history_text}
+{vision_block}{memory_block}
+
 {describe_all_known()}
 
 Respond in EXACTLY this two-line format, nothing else:

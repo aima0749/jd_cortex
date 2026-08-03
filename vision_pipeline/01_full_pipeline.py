@@ -57,7 +57,7 @@ HOLDABLE_LABELS = {
     "wine glass", "fork", "knife", "spoon", "bowl", "teddy bear",
     "umbrella", "handbag", "backpack", "toothbrush", "hair drier",
     "frisbee", "tennis racket", "baseball bat", "baseball glove",
-    "skateboard", "tie", "suitcase","laptop", "tv", "microwave", "oven", "toaster", "sink", "refrigerator","phone"
+    "skateboard", "tie", "suitcase",
 }
 
 SITTABLE_LABELS = {"chair", "couch", "bench"}
@@ -191,6 +191,45 @@ import tempfile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCENE_STATE_FILE = os.path.join(BASE_DIR, "scene_state.json")
+SNAPSHOT_REQUEST_PATH = os.path.join(BASE_DIR, "snapshot_request.txt")
+SNAPSHOTS_DIR = os.path.join(BASE_DIR, "..", "jd_robot_system", "snapshots")
+MAX_SNAPSHOTS = 50  # bounded rolling history - oldest auto-deleted beyond this
+
+
+def check_and_save_snapshot_request(annotated_frame):
+    """Checks for a pending snapshot request from surveillance_watcher.py
+    (a small text file naming why) and, if present, saves the CURRENT
+    frame directly to disk right now - no continuous per-frame writing,
+    only saves an actual file when one is genuinely needed."""
+    if not os.path.exists(SNAPSHOT_REQUEST_PATH):
+        return
+
+    try:
+        with open(SNAPSHOT_REQUEST_PATH, "r") as f:
+            reason_slug = f.read().strip() or "event"
+    except OSError:
+        return
+
+    try:
+        os.remove(SNAPSHOT_REQUEST_PATH)
+    except OSError:
+        pass
+
+    os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    dest_path = os.path.join(SNAPSHOTS_DIR, f"{timestamp}_{reason_slug}.jpg")
+    cv2.imwrite(dest_path, annotated_frame)
+
+    # enforce bounded history - delete oldest beyond MAX_SNAPSHOTS
+    files = [os.path.join(SNAPSHOTS_DIR, f) for f in os.listdir(SNAPSHOTS_DIR)
+             if os.path.isfile(os.path.join(SNAPSHOTS_DIR, f))]
+    if len(files) > MAX_SNAPSHOTS:
+        files.sort(key=os.path.getmtime)
+        for old_file in files[:len(files) - MAX_SNAPSHOTS]:
+            try:
+                os.remove(old_file)
+            except OSError:
+                pass
 
 
 def cleanup_stale_tmp_files():
@@ -402,6 +441,7 @@ def main():
 
         annotated = object_results.plot()
         annotated = pose_results.plot(img=annotated)
+        check_and_save_snapshot_request(annotated)
 
         scene_state = {}
 
