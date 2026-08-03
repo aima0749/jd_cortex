@@ -1,18 +1,22 @@
 """
 Hand-gesture control for JD, run as its own process.
 
-The ARC Memory plugin writes JD's camera view to frame.jpg in the bridge
-folder (click "Attach to JD's camera" on the panel first); this reads
-those frames, classifies the hand with MediaPipe, and sends the matching
-action to ARC over its own TCP connection. panel_server starts and stops
-this when the panel's hand-control button is pressed.
+Frames come from a stationary camera - the laptop webcam - never from
+JD's own camera. JD's camera moves when JD does, so a FORWARD gesture
+would shake the view, lose the hand, and trip the safety STOP below:
+the one gesture meant to make JD walk is the one that cancels itself.
+A camera that doesn't move breaks that loop.
+
+This classifies the hand with MediaPipe and sends the matching action
+to ARC over its own TCP connection. panel_server starts and stops this
+when the panel's hand-control button is pressed.
 
 Gestures (same set the panel legend shows):
     fist=FORWARD  open hand=STOP  index left/right=turn  index down=SIT
     peace sign=WAVE  three fingers=STAND  index+pinky=PUSHUPS
 
-Test without the robot (laptop webcam, needs no ARC):
-    python memory/gesture_control.py webcam
+Run it directly (same camera, same behaviour as the panel button):
+    python memory/gesture_control.py
 Logic checks without any camera or MediaPipe:
     python memory/gesture_control.py selftest
 """
@@ -25,12 +29,10 @@ import time
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-BRIDGE_DIR = os.environ.get("JD_BRIDGE_DIR",
-                            os.path.join(_REPO_ROOT, "bridge"))
-FRAME_PATH = os.path.join(BRIDGE_DIR, "frame.jpg")
-FRAME_STALE_SECS = 3.0   # the plugin rewrites frame.jpg about twice a
-                         # second; anything older is a frozen picture, and
-                         # gesturing at a frozen picture must do nothing
+# Which camera to gesture at. 0 is the built-in webcam; set
+# JD_GESTURE_CAMERA if a USB camera enumerates first or the built-in one
+# is already in use.
+CAMERA_INDEX = int(os.environ.get("JD_GESTURE_CAMERA", "0"))
 
 ARC_HOST = os.environ.get("JD_ARC_HOST", "127.0.0.1")
 ARC_PORT = int(os.environ.get("JD_ARC_PORT", "6666"))
@@ -193,18 +195,6 @@ def _commit(raw):
 
 # --- frames -----------------------------------------------------------
 
-def _frame_from_plugin():
-    """The latest live frame the plugin saved, or None if it's missing,
-    mid-write, or stale."""
-    try:
-        if time.time() - os.path.getmtime(FRAME_PATH) > FRAME_STALE_SECS:
-            return None
-    except OSError:
-        return None
-    frame = cv2.imread(FRAME_PATH)      # None while mid-swap; just retry
-    return frame
-
-
 def step(frame):
     global _committed
     if MIRROR:
@@ -229,8 +219,7 @@ def step(frame):
 
 def main():
     global _hands
-    source = sys.argv[1] if len(sys.argv) > 1 else "plugin"
-    if source == "selftest":
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
         return selftest()
 
     if not _MP_OK:
@@ -242,31 +231,22 @@ def main():
                                       min_tracking_confidence=0.5)
     send_action("STOP")                 # start from a known safe state
 
-    cap = None
-    if source == "webcam":
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("[gesture] could not open the laptop webcam.")
-            return 1
-        print("[gesture] webcam test - show a hand; q in the window quits.")
-    else:
-        print("[gesture] reading JD's view from " + FRAME_PATH)
-        print("[gesture] (click 'Attach to JD's camera' on the panel if "
-              "no frames arrive)")
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not cap.isOpened():
+        print("[gesture] could not open camera %d." % CAMERA_INDEX)
+        print("[gesture] a camera can only be opened by one program at a "
+              "time - if ARC's Camera skill is pointed at this same webcam, "
+              "point ARC at JD's camera instead, or set JD_GESTURE_CAMERA "
+              "to a different index.")
+        return 1
+    print("[gesture] watching camera %d - show a hand; q in the window "
+          "quits." % CAMERA_INDEX)
 
-    show = source == "webcam" or os.environ.get("JD_GESTURE_WINDOW") == "on"
-    warned = 0.0
+    show = os.environ.get("JD_GESTURE_WINDOW", "on") != "off"
     try:
         while True:
-            if cap is not None:
-                ok, frame = cap.read()
-                frame = frame if ok else None
-            else:
-                frame = _frame_from_plugin()
-            if frame is None:
-                if cap is None and time.time() - warned > 5:
-                    print("[gesture] waiting for a live frame.jpg...")
-                    warned = time.time()
+            ok, frame = cap.read()
+            if not ok or frame is None:
                 time.sleep(0.05)
                 continue
             annotated = step(frame)
@@ -284,8 +264,7 @@ def main():
             _hands.close()
         except Exception:
             pass
-        if cap is not None:
-            cap.release()
+        cap.release()
         if show:
             try:
                 cv2.destroyAllWindows()
