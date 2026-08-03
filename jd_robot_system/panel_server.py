@@ -134,19 +134,17 @@ def _gesture_on():
     global _gesture_proc
     if _gesture_alive():
         return "OK: gesture mode on"
-    env = dict(os.environ)
-    env["JD_BRIDGE_DIR"] = BRIDGE_DIR
     try:
         _gesture_proc = subprocess.Popen([sys.executable, GESTURE_SCRIPT],
-                                         cwd=_REPO_ROOT, env=env)
+                                         cwd=_REPO_ROOT)
     except Exception as e:
         return "ERR: could not start hand control (" + str(e) + ")"
     time.sleep(1.5)
     if not _gesture_alive():
         # it printed its own reason (usually a missing library) and died
         return ("ERR: hand control exited at startup - check the Python "
-                "window for the reason (often: pip install opencv-python "
-                '"mediapipe==0.10.21")')
+                "window for the reason (usually a missing library, or the "
+                "webcam already in use by another program)")
     set_event("hand control on")
     return "OK: gesture mode on"
 
