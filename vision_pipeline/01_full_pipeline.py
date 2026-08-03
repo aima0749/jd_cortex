@@ -37,8 +37,15 @@ ARC_HOST = "127.0.0.1"
 ARC_PORT = 6666
 SNAPSHOT_FOLDER = None  # set in main() using os.path.expanduser
 
-OBJECT_MODEL_PATH = "yolov8m.pt"
-POSE_MODEL_PATH = "yolov8m-pose.pt"
+# Device and models are separate knobs on purpose. Running a smaller
+# model changes what the pipeline DETECTS, which changes scene_state.json
+# and everything downstream of it - so it is never chosen for you as a
+# side effect of which machine you happen to be on. If you run nano, it
+# is because you typed nano, and the startup banner says so.
+JD_DEVICE = os.environ.get("JD_DEVICE", "cuda").strip().lower()
+
+OBJECT_MODEL_PATH = os.environ.get("JD_OBJECT_MODEL", "yolov8m.pt")
+POSE_MODEL_PATH = os.environ.get("JD_POSE_MODEL", "yolov8m-pose.pt")
 OBJECT_CONFIDENCE_THRESHOLD = 0.25
 PERSON_CONFIDENCE_THRESHOLD = 0.35
 
@@ -131,6 +138,69 @@ def trigger_and_get_snapshot(sock, snapshot_folder, last_seen_file, max_wait=1.0
         return None, newest
 
     return frame, newest
+
+
+def resolve_device():
+    """Returns the torch device string to run on, or exits with a reason.
+
+    'cuda' is the default because that is what this pipeline's timing
+    constants are tuned for. If CUDA was expected but isn't there, that
+    is almost always a broken environment rather than a machine that
+    genuinely has no GPU - on Windows a plain 'pip install torch' quietly
+    installs the CPU-only build, so an env rebuild can silently cost you
+    the GPU. Falling back on its own would hide exactly that, and the
+    pipeline would look like it was working while detecting far less.
+    So: say cpu out loud, or get told what's wrong.
+    """
+    import torch
+
+    have_cuda = torch.cuda.is_available()
+
+    if JD_DEVICE == "cpu":
+        return "cpu"
+
+    if JD_DEVICE == "cuda":
+        if have_cuda:
+            return "cuda"
+        print("ERROR: JD_DEVICE is 'cuda' (the default) but torch reports no "
+              "CUDA device.")
+        print(f"       torch {torch.__version__}, torch.version.cuda="
+              f"{torch.version.cuda}")
+        if torch.version.cuda is None:
+            print("       This is a CPU-ONLY torch build. Reinstall with the "
+                  "CUDA index URL:")
+            print("         pip install torch torchvision --index-url "
+                  "https://download.pytorch.org/whl/cu121")
+        else:
+            print("       torch has CUDA support but found no usable GPU - "
+                  "check the driver.")
+        print("       To run on the CPU deliberately, set JD_DEVICE=cpu "
+              "and read the warning it prints.")
+        raise SystemExit(1)
+
+    print(f"ERROR: JD_DEVICE='{JD_DEVICE}' is not understood. Use 'cuda' or "
+          f"'cpu'.")
+    raise SystemExit(1)
+
+
+def warn_if_cpu(device):
+    """The timing constants below are frame-rate coupled, so CPU is not
+    simply 'the same thing, slower'. Anyone running on CPU should know
+    that before they trust what they see."""
+    if device != "cpu":
+        return
+    print("")
+    print("  WARNING: running on the CPU. This is a debugging mode, not a")
+    print("  quieter version of the real thing:")
+    print("    - BASELINE_DECAY is applied per frame, so the standing/sitting")
+    print("      baseline adapts far more slowly at a lower frame rate.")
+    print("    - POSTURE_CONFIDENCE_WINDOW needs several agreeing readings")
+    print("      inside 0.6s; at a few frames per second posture will often")
+    print("      stay 'uncertain'.")
+    print("    - FRAMES_TO_CONFIRM/CLEAR are frame counts, so holding and")
+    print("      sitting become much stickier.")
+    print("  Do not tune anything downstream against what you see here.")
+    print("")
 
 
 track_height_baseline = {}
@@ -352,7 +422,10 @@ def main():
     known_names, known_encodings = load_known_faces()
     print(f"Loaded {len(known_names)} known face(s): {', '.join(known_names)}")
 
-    print(f"Loading models onto GPU... (object={OBJECT_MODEL_PATH}, pose={POSE_MODEL_PATH})")
+    device = resolve_device()
+
+    print(f"Device: {device}  (JD_DEVICE)")
+    print(f"Loading models... (object={OBJECT_MODEL_PATH}, pose={POSE_MODEL_PATH})")
     for path in [OBJECT_MODEL_PATH, POSE_MODEL_PATH]:
         if os.path.exists(path):
             size_mb = os.path.getsize(path) / (1024 * 1024)
@@ -361,9 +434,10 @@ def main():
             print(f"  -> {path}: NOT FOUND LOCALLY - will attempt download")
     object_model = YOLO(OBJECT_MODEL_PATH)
     pose_model = YOLO(POSE_MODEL_PATH)
-    object_model.to("cuda")
-    pose_model.to("cuda")
+    object_model.to(device)
+    pose_model.to(device)
     print("Models loaded.")
+    warn_if_cpu(device)
 
     global SNAPSHOT_FOLDER
     SNAPSHOT_FOLDER = os.path.join(os.path.expanduser("~"), "Pictures", "My Robot Pictures")
@@ -387,7 +461,7 @@ def main():
         frame_count += 1
 
         object_results = object_model(frame, conf=OBJECT_CONFIDENCE_THRESHOLD,
-                                       verbose=False, device="cuda")[0]
+                                       verbose=False, device=device)[0]
         object_boxes = []
         object_labels = []
         if object_results.boxes is not None:
@@ -398,7 +472,7 @@ def main():
                 object_labels.append(label)
 
         pose_results = pose_model.track(frame, persist=True, conf=PERSON_CONFIDENCE_THRESHOLD,
-                                         tracker="bytetrack.yaml", verbose=False, device="cuda")[0]
+                                         tracker="bytetrack.yaml", verbose=False, device=device)[0]
 
         annotated = object_results.plot()
         annotated = pose_results.plot(img=annotated)
