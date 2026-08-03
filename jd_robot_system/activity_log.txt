@@ -30,3 +30,14 @@
 [2026-07-29 14:47:30] 2 unknown people detected (ids=['1', '4'])
 [2026-07-29 14:52:01] Unknown person detected (id=4)
 [2026-07-29 14:54:17] Unknown person detected (id=26)
+[2026-07-30 10:46:27] Unknown person detected (id=7) - snapshot: snapshots\20260730_104627_unknown.jpg
+[2026-07-30 10:48:28] Unknown person detected (id=35) - snapshot: snapshots\20260730_104828_unknown.jpg
+[2026-07-30 10:51:29] Unknown person detected (id=89) - snapshot: snapshots\20260730_105129_unknown.jpg
+[2026-07-30 10:53:30] Unknown person detected (id=124) - snapshot: snapshots\20260730_105330_unknown.jpg
+[2026-07-30 10:55:30] Unknown person detected (id=152) - snapshot: snapshots\20260730_105530_unknown.jpg
+[2026-07-30 11:47:25] Unknown person(s) detected (ids=['1', '2']) - Time: 11:47 AM (morning). 2 unrecognized people detected in view, present continuously for the last 3 seconds (not a brief glimpse).
+[2026-07-30 11:50:31] Unknown person(s) detected (ids=['8', '3']) - Time: 11:49 AM (morning). 2 unrecognized people detected in view, present continuously for the last 3 seconds (not a brief glimpse).
+[2026-07-30 11:53:11] Unknown person(s) detected (ids=['40']) - Time: 11:52 AM (morning). one unrecognized person detected in view, present continuously for the last 3 seconds (not a brief glimpse).
+[2026-07-30 12:05:29] Unknown person(s) detected (ids=['14']), night=False
+[2026-07-30 12:08:03] Unknown person(s) detected (ids=['39']), night=False
+[2026-08-03 10:38:50] Unknown person(s) detected (ids=['7']), night=False
