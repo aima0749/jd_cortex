@@ -1,154 +1,125 @@
-﻿# ProjectMoveMint - JD Robot System
+# JD Robot Cortex
 
-## Non-technical summary
+## Summary
 
-This folder contains a Python project that helps control a JD humanoid robot using the ARC software. It is not the robot itself. It is a set of programs that:
+This repository contains a Python helper system for a JD humanoid robot that runs alongside Synthiam ARC. It is not ARC itself. The code is designed to:
 
-- connect to the robot control software (ARC),
-- send the robot safe commands,
-- speak messages through the robot,
-- uses a camera system to understand the scene,
-- uses Google Gemini to interpret natural language commands.
+- connect to ARC and send safe robot commands,
+- speak replies through ARC's speech synthesis,
+- accept typed commands or local push-to-talk voice commands,
+- optionally use camera-derived vision context,
+- optionally use Google Gemini for natural language understanding.
 
-If you are not a programmer, the important part is that this project is a helper system for the robot. It requires ARC and a working robot setup to do anything useful.
+## Project structure
 
-## Technical summary
+- `jd_robot_system/` - main robot control code, action execution, and speech interface.
+- `vision_pipeline/` - optional vision processing and scene state generation.
+- `setup/` - setup helpers such as face enrollment and GPU checks.
+- `shared/` - shared helper modules used by multiple components.
+- `voice_model/` - placeholder location for local speech model assets used by Parakeet.
+- `start_jd.bat` - Windows helper script to launch the system.
 
-This folder contains:
+The main entrypoint is `jd_robot_system/main.py`. It currently supports typed commands and local microphone voice input via `jd_robot_system/voice_parakeet.py`.
 
-- `jd_robot_system/` - the main robot control code.
-- `vision_pipeline/` - optional vision processing and scene state output.
-- `memory/` - the witness memory: JD's persistent diary of who and what it has seen.
-- `setup/` - setup helpers like GPU checks and face enrollment.
-- `shared/` - shared utilities and diagnostics tools.
-- `start_jd.bat` - a Windows helper script to launch the main program.
+## Requirements
 
-The main program is `jd_robot_system/main.py`. It can accept typed commands or voice commands from ARC. It uses `jd_robot_system/known_actions.py` to know what actions are safe for the robot.
+- Windows PC recommended for ARC and vision support.
+- Python 3.10 or newer.
+- Synthiam ARC installed and the JD robot project loaded.
+- ARC TCP script server enabled on the host and port configured in `jd_robot_system/config.py`.
+- If you want Gemini features, a valid Gemini API key.
+- If you want local voice commands, you must provide the Parakeet model files in `voice_model/parakeet/`.
 
-`jd_robot_system/config.py` contains the settings. You must update it with your ARC host, port, and your Gemini API key before using the system.
+## Installation
 
-## Witness memory (who and what JD has seen)
+1. Create and activate a Python virtual environment:
 
-`memory/witness_recorder.py` runs as its own process next to the vision
-pipeline. It reads `vision_pipeline/scene_state.json` and writes debounced
-events (arrivals, departures with duration, held objects, furniture,
-objects coming into view) to a small SQLite diary at
-`memory/witness_diary.sqlite3`.
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
 
-There is only one brain: `main.py` injects a compact diary block into the
-same Gemini prompt that already handles conversation and action matching,
-so questions like "who did you see today?", "when did you last see name1?"
-or "what was name2 holding?" are answered by that one call. There is no
-separate memory-answering path. If neither the recorder nor the diary
-exists, the system runs exactly as before.
+2. If you intend to use vision with an NVIDIA GPU, install the correct PyTorch wheels first using the command from https://pytorch.org. Example:
 
-Run it in its own terminal (order relative to the vision pipeline does not
-matter - it waits):
+   ```powershell
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+   ```
+
+3. Install the remaining dependencies:
+
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+## Configuration
+
+Open `jd_robot_system/config.py` and configure:
+
+- `ARC_HOST` - the IP address where ARC is listening.
+- `ARC_PORT` - the ARC TCP port (default 6666).
+- `GEMINI_API_KEY` - your Gemini key, or set the environment variable `GEMINI_API_KEY`.
+
+The code reads `GEMINI_API_KEY` from the environment first, then falls back to the value in `config.py`.
+
+## Optional local voice model
+
+Local push-to-talk voice recognition requires a Parakeet model asset folder at `voice_model/parakeet/`. The repository currently includes only `tokens.txt`. You must add the corresponding model files yourself:
+
+- `encoder.int8.onnx`
+- `decoder.int8.onnx`
+- `joiner.int8.onnx`
+
+If you do not provide these files, use typed command mode only.
+
+## Running the system
+
+Run the main program directly:
 
 ```powershell
-python memory\witness_recorder.py
+cd jd_robot_system
+python main.py
 ```
 
-Self-check without a camera or robot:
+Or use `start_jd.bat` after editing the `ROOT` path at the top of the file to match your local checkout.
 
-```powershell
-python memory\witness_recorder.py selftest
-```
+When `main.py` starts, choose:
 
-Environment variables:
-
-- `JD_ANNOUNCE` - `on` makes JD announce arrivals out loud (through
-  main.py's speaker, via the speech queue). Default `off`: JD remembers
-  silently and only speaks when spoken to.
-- `JD_SPEAK_TARGET` - `ezb` (default) speaks through JD's chest speaker
-  with `SayEZBWait()`; `pc` uses the computer's speakers with `SayWait()`.
-- `GEMINI_API_KEY_2` / `GEMINI_API_KEY_3` - optional extra Gemini keys;
-  the brain rotates to the next key when one hits the free tier's daily
-  quota.
-- `JD_DIARY_KEEP_DAYS` - diary retention, default 14 days.
-
-## What works in this folder
-
-- The main Python program can run and send commands to ARC if ARC is available.
-- The project can speak through ARC using `jd_robot_system/tts.py`.
-- Typed commands are supported.
-- Voice command mode is supported if ARC speech recognition is enabled.
-- Google Gemini support is available if a valid API key is set.
-- The vision pipeline files are present, though vision is optional and depends on the camera setup and GPU.
-- There are diagnostics tools in `shared/diagnostics/` for checking the ARC connection.
-
-## What is not ready or may fail
-
-- The default `GEMINI_API_KEY` in `jd_robot_system/config.py` is not valid. Gemini features will not work until you add a real key.
-- Gemini model names may change over time. If Gemini stops working, the code may need model updates.
-- Voice mode only works if ARC speech recognition is active and configured.
-- The vision pipeline only works if the vision code is running and `scene_state.json` is kept current.
-- This folder has not been fully tested on Linux or macOS.
-- There is no automated test suite included.
-
-## Quick start
-
-1. Install Python 3.8 or higher.
-2. Install required packages:
-
-   ```powershell
-   pip install google-generativeai requests ultralytics opencv-python numpy Pillow face_recognition pydub
-   ```
-
-3. Edit `jd_robot_system/config.py` and set:
-   - `GEMINI_API_KEY` to your real Google Gemini API key.
-   - `ARC_HOST` and `ARC_PORT` to the address where ARC is running.
-
-4. Start ARC and load the JD robot project.
-5. Run the main program from this folder:
-
-   ```powershell
-   python jd_robot_system\main.py
-   ```
-
-   Or use the Windows helper:
-
-   ```powershell
-   .\start_jd.bat
-   ```
+- `t` to type commands,
+- `v` to use local voice input via the microphone.
 
 ## Troubleshooting
 
-- If ARC does not connect, run `python shared/diagnostics/arc_port_scanner.py`.
-- If Gemini does not work, verify `GEMINI_API_KEY` and run:
+- If ARC fails to connect, verify ARC is running, the JD project is loaded, the TCP server is enabled, and `ARC_HOST`/`ARC_PORT` are correct.
+- If Gemini fails, verify your API key and run:
 
   ```powershell
   python -c "from jd_robot_system.gemini_brain import list_available_models; list_available_models()"
   ```
 
-- If vision does not work, run `python vision_pipeline/00_baseline_gpu_test.py`.
-- If you need to update face data, run `python setup/enroll_faces.py`.
+- If local voice doesn't work, confirm your microphone is available and `voice_model/parakeet/` contains the required `.onnx` files. You can test the setup with:
 
-## The ARC panel (Memory plugin)
+  ```powershell
+  python jd_robot_system/test_parakeet.py
+  ```
 
-`memory/plugin/` is the ARC custom plugin - JD's control panel
-inside ARC. One screen shows what JD sees right now, answers typed or spoken
-questions, and switches hand-gesture control on and off. It talks to
-`main.py` over `127.0.0.1:5005`, so everything it does goes through the
-same single brain as typed and voice commands.
+- If vision fails, run:
 
-Build it once: open `memory/plugin/MY_PROJECT_NAME.csproj` in Visual
-Studio (ARC plugin SDK referenced), build, and the DLL lands in ARC's
-plugin folder. In ARC, add the Memory skill to the project and click
-"Attach to JD's camera" after the Camera Device is started - that makes
-the plugin write live frames to `bridge/frame.jpg` for gesture control.
+  ```powershell
+  python vision_pipeline/00_baseline_gpu_test.py
+  ```
 
-The panel's dot turns green when `main.py` is running. For demos,
-run `main.py` in type mode and use the panel's hold-to-talk button - that
-way the panel owns the microphone and nothing else is listening.
-Hold-to-talk uses the same `voice_model/parakeet` folder as voice mode;
-set `JD_MIC_DEVICE` if Windows' default microphone is the wrong one
-(`python jd_robot_system\panel_listen.py devices` lists them). Gesture
-control additionally needs `pip install "mediapipe==0.10.21"` and, on
-hardware day, a check that the Auto Position walking action names at the
-top of `memory/gesture_control.py` match the ARC project.
+- To refresh face recognition data, add photos to `setup/known_faces/` and run:
+
+  ```powershell
+  cd setup
+  python enroll_faces.py
+  ```
 
 ## Notes
 
+- This repository is intended to be used alongside Synthiam ARC and a real JD robot.
+- The local voice model files are not included in the repository.
+- The Gemini API key placeholder in `jd_robot_system/config.py` will not work until replaced with a valid key.
+- There is no automated test suite included in the repository.
 - Do not put secret API keys into `config.py` if you are sharing this folder.
 - This README is meant to explain what this folder contains and what it can do.

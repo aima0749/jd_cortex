@@ -1,17 +1,15 @@
-# JD Robot — Setup Guide
+﻿# JD Robot — Setup Guide
 
-This sets up JD's full software system: vision (camera/object/face detection),
-voice input (local speech-to-text), Gemini-powered understanding, and speech
-output through JD's onboard speaker.
+This guide helps you set up JD's Python helper system, including vision support, local voice input, Gemini-powered understanding, and speech output through ARC.
 
 ---
 
 ## 1. Requirements
 
-- Windows PC with an NVIDIA GPU (recommended — CPU works but is much slower for vision)
-- Python 3.10 or newer
-- Synthiam ARC installed, with JD's project loaded and the physical EZ-B v4 board available
-- Internet connection (for initial setup and Gemini API calls)
+- Windows PC with an NVIDIA GPU recommended for vision performance.
+- Python 3.10 or newer.
+- Synthiam ARC installed with the JD project loaded.
+- Internet connection for initial dependency installation and optional Gemini API calls.
 
 ---
 
@@ -24,99 +22,114 @@ cd jd_cortex
 
 ---
 
-## 3. Set up the Python environment
+## 3. Create the Python environment
 
 ```powershell
-python -m venv jd_env
-.\jd_env\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-Install GPU-enabled PyTorch **first** (check [pytorch.org](https://pytorch.org) for the exact command matching your GPU's CUDA version — example below):
+If you want GPU support for vision, install the correct PyTorch wheel first from https://pytorch.org. Example:
+
 ```powershell
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Then install everything else:
+Then install the repository dependencies:
+
 ```powershell
 pip install -r requirements.txt
 ```
 
 ---
 
-## 4. Download the local speech-to-text model
+## 4. Local voice model
 
-One-time download (~600MB), no manual steps needed:
-```powershell
-python setup_voice_model.py
-```
+Local voice recognition uses a Parakeet model folder at `voice_model/parakeet/`.
+
+The repository currently includes only `tokens.txt`; the `.onnx` model files are not included. To use voice mode, add the following files to `voice_model/parakeet/`:
+
+- `encoder.int8.onnx`
+- `decoder.int8.onnx`
+- `joiner.int8.onnx`
+
+If you do not have these model files, use typed command mode instead.
 
 ---
 
-## 5. Enroll known faces (optional, for face recognition)
+## 5. Enroll known faces (optional)
 
-1. Put clear photos of each person into `setup/known_faces/` (e.g. `alex.jpg`)
+1. Put clear photos of each person into `setup/known_faces/` (for example: `alex.jpg`).
 2. Run:
+
    ```powershell
    cd setup
    python enroll_faces.py
    cd ..
    ```
-This generates `known_encodings.pkl` locally — it's personal data and is **not** included in the repo, so this step must be done fresh on each machine.
+
+This creates `known_encodings.pkl` locally. It is personal data and is not stored in the repository.
 
 ---
 
 ## 6. Set your Gemini API key
 
-1. Get a free key: https://aistudio.google.com/apikey
-2. Open `jd_robot_system/config.py`
-3. Replace:
-   ```python
-   GEMINI_API_KEY = "PUT_YOUR_KEY_HERE"
-   ```
-   with the real key.
+1. Get a key from https://aistudio.google.com/apikey.
+2. Open `jd_robot_system/config.py`.
+3. Set the API key in `GEMINI_API_KEY`, or set the environment variable `GEMINI_API_KEY` before running.
 
 ---
 
 ## 7. Set up ARC
 
-1. Open Synthiam ARC and load JD's project.
-2. **Add the Speech Synthesis skill** (required for JD to actually speak):
-   `Project → Add Robot Skill → Audio → Speech Synthesis`
-3. **Enable the TCP script server**:
-   `Options → TCP Server` → check *Enable Server for EZ_B Board 0*, port `6666`.
-4. **Connect to the physical EZ-B v4 board**: in the Connection panel, click *Connect* and confirm it turns green (this is separate from the TCP server above).
+1. Open Synthiam ARC and load the JD project.
+2. Add the Speech Synthesis skill: `Project → Add Robot Skill → Audio → Speech Synthesis`.
+3. Enable the TCP script server: `Options → TCP Server` → check *Enable Server for EZ_B Board 0* on port `6666`.
+4. Connect the EZ-B v4 board so the robot is ready to receive commands.
 
 ---
 
-## 8. Run everything
+## 8. Run the system
 
-Easiest way — starts both the vision pipeline and the command system together:
+The easiest way is to use `start_jd.bat`, but first edit the `ROOT` variable at the top of the file to point to your checkout folder.
+
 ```powershell
 start_jd.bat
 ```
 
-Or run them separately, in two terminals (vision pipeline first, give it ~10 seconds to load before starting the second):
+Or run the components manually:
+
 ```powershell
 cd vision_pipeline
 python 01_full_pipeline.py
 ```
+
 ```powershell
 cd jd_robot_system
 python main.py
 ```
 
-When `main.py` asks for input mode, choose:
-- **`t`** — type commands
-- **`v`** — speak commands (press Enter, then talk — local, offline, no internet needed for this part)
+When the program asks for input mode, choose:
+
+- `t` — type commands.
+- `v` — local voice commands (press Enter, then speak).
 
 ---
 
 ## Troubleshooting
 
-- **JD doesn't speak** — confirm the Speech Synthesis skill (step 7.2) is added and the EZ-B board shows connected/green (step 7.4).
-- **Gemini errors about a model** — run this diagnostic to see what's currently available:
+- **JD does not speak** — make sure ARC has the Speech Synthesis skill and the TCP server is enabled.
+- **Gemini problems** — verify your API key and try:
+
   ```powershell
-  python -c "from gemini_brain import list_available_models; list_available_models()"
+  python -c "from jd_robot_system.gemini_brain import list_available_models; list_available_models()"
   ```
-  Update `GEMINI_MODEL_CANDIDATES` in `config.py` if needed.
-- **Face recognition shows "unknown" for everyone** — repeat step 5 with clearer, well-lit photos.
+
+- **Local voice input does not work** — confirm your mic works and that `voice_model/parakeet/` contains the required Parakeet `.onnx` files.
+- **Vision fails to start** — run:
+
+  ```powershell
+  python vision_pipeline/00_baseline_gpu_test.py
+  ```
+
+- **Face recognition is not accurate** — repeat enrollment with clear, well-lit photos.
