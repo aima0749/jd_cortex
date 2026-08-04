@@ -192,6 +192,22 @@ def main():
         print("conversational replies and Gemini-based matching will fail until")
         print("you set a real key from https://aistudio.google.com/apikey\n")
 
+    # The ARC panel (the Memory plugin) talks to this same brain over
+    # 127.0.0.1:5005. One lock serialises panel requests with everything
+    # else so two answers can never interleave on the one ARC connection.
+    brain_lock = threading.Lock()
+
+    def panel_respond(text):
+        with brain_lock:
+            return process_command(arc, text)
+
+    # Started BEFORE the mode prompt: the panel is a separate window in
+    # ARC, and leaving it stuck on "waiting for JD's brain" until someone
+    # answers a question in a terminal looks exactly like a broken plugin.
+    # Nothing here speaks on its own, so it is safe ahead of the prompt.
+    panel_server.register(panel_respond, shutdown_fn=lambda: os._exit(0))
+    panel_server.start()
+
     # ASK MODE FIRST, before anything can start speaking
     mode = input("Input mode - (t)ype or (v)oice via mic [local Parakeet]? [t/v]: ").strip().lower()
     if mode == "v":
@@ -207,18 +223,6 @@ def main():
     alert_thread = threading.Thread(target=alert_checker_loop, args=(arc, stop_event), daemon=True)
     alert_thread.start()
     print("(Background alert checker started - will speak any queued surveillance alerts.)\n")
-
-    # The ARC panel (the Memory plugin) talks to this same brain over
-    # 127.0.0.1:5005. One lock serialises panel requests with everything
-    # else so two answers can never interleave on the one ARC connection.
-    brain_lock = threading.Lock()
-
-    def panel_respond(text):
-        with brain_lock:
-            return process_command(arc, text)
-
-    panel_server.register(panel_respond, shutdown_fn=lambda: os._exit(0))
-    panel_server.start()
 
     while True:
         if mode == "v":

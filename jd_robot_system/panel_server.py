@@ -9,8 +9,11 @@ one ARC connection, no forwarding queue.
 
 Panel protocol (must match MainForm.cs):
     ping              -> OK: pong
-    bridgedir         -> OK: <folder where the plugin writes frame.jpg>
     status            -> STATUS person=.. | object=.. | event=.. | gesture=..
+                         (a trailing "| gemini N/M ok" segment carries the
+                         API usage counter; segments without '=' are extras)
+    diary [n]         -> DIARY hh:mm text ;; hh:mm text ...   (oldest first)
+    alerts [n]        -> ALERTS today=N ;; hh:mm text ;; ...   (oldest first)
     gesture on|off    -> start/stop the hand-control subprocess
     listen start/stop -> hold-to-talk recording via panel_listen
     stop              -> shut the whole brain down (panel confirms first)
@@ -32,8 +35,8 @@ _PORT = 5005
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Where the C# plugin writes frame.jpg (it asks us via "bridgedir" on
-# connect, so the two sides can never disagree about the path).
+# Kept for older plugin builds that still ask "bridgedir" on connect;
+# nothing on the Python side reads or writes this folder anymore.
 BRIDGE_DIR = os.environ.get("JD_BRIDGE_DIR",
                             os.path.join(_REPO_ROOT, "bridge"))
 
@@ -43,6 +46,23 @@ SCENE_STATE_PATH = os.environ.get(
 SCENE_STALE_SECS = 10.0
 
 GESTURE_SCRIPT = os.path.join(_REPO_ROOT, "memory", "gesture_control.py")
+
+# surveillance_watcher opens this with a bare relative name, so it lands
+# in whatever folder the watcher was started from. run.py starts it from
+# jd_robot_system, which is where this file lives too - anchoring here
+# rather than to the launch directory keeps the panel pointed at the same
+# file no matter how the panel's own process was started.
+ACTIVITY_LOG_PATH = os.environ.get(
+    "JD_ACTIVITY_LOG",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "activity_log.txt"))
+SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "snapshots")
+
+# Every verb the panel protocol uses, matched or not. Kept next to the
+# handler so adding a command here is the same edit as implementing it.
+_RESERVED = {"ping", "status", "diary", "alerts", "gesture", "listen",
+             "stop", "bridgedir", "snapshots", "quota"}
 
 _lock = threading.Lock()
 _respond_fn = None                # main.py registers process_command here
@@ -96,16 +116,69 @@ def _read_scene():
     return person, holding
 
 
-def _last_diary_line():
+def _recent_diary(limit):
+    """Rows straight from the witness diary, oldest first, or []."""
     try:
         sys.path.insert(0, _REPO_ROOT)
         from memory import witness_store
-        events = witness_store.recent_events(1)
-        if events:
-            return events[-1][4][:80]      # rows are (ts, kind, person, detail, text)
+        return witness_store.recent_events(limit)
     except Exception:
-        pass
+        return []
+
+
+def _last_diary_line():
+    events = _recent_diary(1)
+    if events:
+        return events[-1][4][:80]          # rows are (ts, kind, person, detail, text)
     return None
+
+
+def _diary_reply(limit):
+    """One line the panel can split on ' ;; ' - the protocol is one reply
+    line per command, so a list has to travel flat."""
+    events = _recent_diary(limit)
+    if not events:
+        return "DIARY -"
+    parts = []
+    for ts, _kind, _person, _detail, text in events:
+        stamp = time.strftime("%H:%M", time.localtime(ts))
+        clean = " ".join(str(text).split())        # no newlines, no runs
+        parts.append(stamp + " " + clean[:70])
+    return "DIARY " + " ;; ".join(parts)
+
+
+def _alerts_reply(limit):
+    """Tail of the surveillance log. Reports a count of log ENTRIES today
+    rather than a count of people: the watcher keys off tracker ids, and
+    those get reassigned freely, so one visitor can produce several
+    entries. Saying 'entries' keeps the panel honest about that."""
+    try:
+        with open(ACTIVITY_LOG_PATH, "r", encoding="utf-8",
+                  errors="replace") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return "ALERTS today=0"
+
+    today = time.strftime("%Y-%m-%d")
+    todays = [ln for ln in lines if ln.startswith("[" + today)]
+    parts = ["today=%d" % len(todays)]
+
+    for line in (todays or lines)[-limit:]:
+        stamp, text = "", line
+        if line.startswith("[") and "]" in line:
+            head, text = line[1:].split("]", 1)
+            stamp = head[11:16]                # HH:MM out of the full date
+        clean = " ".join(text.split())
+        parts.append((stamp + " " + clean).strip()[:70])
+    return "ALERTS " + " ;; ".join(parts)
+
+
+def _snapshot_count():
+    try:
+        return len([f for f in os.listdir(SNAPSHOT_DIR)
+                    if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    except OSError:
+        return 0
 
 
 def _status_line():
@@ -140,18 +213,38 @@ def _gesture_on():
     if _gesture_alive():
         return "OK: gesture mode on"
     try:
-        _gesture_proc = subprocess.Popen([sys.executable, GESTURE_SCRIPT],
-                                         cwd=_REPO_ROOT)
+        # Captured, not inherited: this subprocess has no console of its
+        # own, so anything it prints on the way out would otherwise
+        # vanish and the panel button would look like it did nothing.
+        _gesture_proc = subprocess.Popen(
+            [sys.executable, GESTURE_SCRIPT], cwd=_REPO_ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace")
     except Exception as e:
         return "ERR: could not start hand control (" + str(e) + ")"
-    time.sleep(1.5)
+    time.sleep(2.0)
     if not _gesture_alive():
-        # it printed its own reason (usually a missing library) and died
-        return ("ERR: hand control exited at startup - check the Python "
-                "window for the reason (usually a missing library, or the "
-                "webcam already in use by another program)")
+        reason = _gesture_exit_reason()
+        return "ERR: hand control quit at startup - " + reason
     set_event("hand control on")
     return "OK: gesture mode on"
+
+
+def _gesture_exit_reason():
+    """The most useful line the dead subprocess printed. Its own error
+    text is better than anything guessable from out here."""
+    try:
+        out = _gesture_proc.stdout.read() if _gesture_proc.stdout else ""
+    except Exception:
+        out = ""
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    # skip MediaPipe/TensorFlow's startup noise, which is never the cause
+    noise = ("INFO:", "WARNING: All log", "W0000", "I0000")
+    useful = [ln for ln in lines if not ln.startswith(noise)]
+    if useful:
+        return " ".join(useful[-2:])[:200]
+    return ("no output - most often the webcam is already in use "
+            "(ARC's Camera skill holds it while the vision pipeline runs)")
 
 
 def _gesture_off():
@@ -188,6 +281,22 @@ def _handle(cmd):
     if low == "status":
         return _status_line()
 
+    if low.startswith("alerts"):
+        arg = low[6:].strip()
+        try:
+            limit = max(1, min(int(arg), 20)) if arg else 4
+        except ValueError:
+            limit = 4
+        return _alerts_reply(limit)
+
+    if low.startswith("diary"):
+        arg = low[5:].strip()
+        try:
+            limit = max(1, min(int(arg), 20)) if arg else 8
+        except ValueError:
+            limit = 8
+        return _diary_reply(limit)
+
     if low == "gesture on":
         return _gesture_on()
 
@@ -218,6 +327,17 @@ def _handle(cmd):
 
     if cmd == "":
         return "UNKNOWN: (empty)"
+
+    # Anything that LOOKS like a panel command but wasn't matched above is
+    # refused, not forwarded. A newer plugin talking to an older server
+    # would otherwise have its polling commands answered by Gemini - once
+    # every couple of seconds, burning the daily quota and making JD act
+    # on them. Free text still reaches the brain; protocol words never do.
+    first = low.split()[0]
+    if first in _RESERVED:
+        return ("UNKNOWN: '" + first + "' is a panel command this brain "
+                "doesn't know - the plugin is newer than the Python side.")
+
     return "OK: " + _ask_brain(cmd)
 
 
