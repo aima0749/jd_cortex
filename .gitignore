@@ -50,3 +50,6 @@ speech_queue.json
 
 # --- Live camera frames from the ARC plugin (runtime only) ---
 bridge/
+
+# runtime output, not source - changes every session
+jd_robot_system/activity_log.txt

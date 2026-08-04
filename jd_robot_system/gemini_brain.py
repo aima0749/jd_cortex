@@ -37,6 +37,21 @@ def list_available_models():
         print(f"ListModels failed: {e}")
 
 
+# Running tally for this session. Quota failure is otherwise invisible:
+# an exhausted key looks exactly like "nothing worth saying". The panel
+# reads this so you can see the pool draining during a session instead
+# of guessing afterwards.
+_usage = {"calls": 0, "ok": 0, "quota_hits": 0, "errors": 0}
+
+
+def usage_summary():
+    """One short line for the panel: calls made, how many succeeded, and
+    how many hit the daily cap."""
+    u = _usage
+    return "gemini %d/%d ok" % (u["ok"], u["calls"]) + (
+        ", %d quota" % u["quota_hits"] if u["quota_hits"] else "")
+
+
 def _call_once(model_name, api_key, key_label, prompt):
     """Single attempt at one model with one key. Returns (result_text,
     error_kind): None on success, 'not_found' (model gone - next model),
@@ -47,6 +62,7 @@ def _call_once(model_name, api_key, key_label, prompt):
         f"{model_name}:generateContent?key={api_key}"
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    _usage["calls"] += 1
     try:
         response = requests.post(url, json=payload, timeout=GEMINI_TIMEOUT)
     except requests.exceptions.RequestException as e:
@@ -57,6 +73,7 @@ def _call_once(model_name, api_key, key_label, prompt):
         print(f"  [Gemini] {model_name} unavailable (404) - trying next model...")
         return None, "not_found"
     if response.status_code == 429:
+        _usage["quota_hits"] += 1
         print(f"  [Gemini] quota exhausted on {model_name} with {key_label} - trying next key...")
         return None, "quota"
     if not response.ok:
@@ -65,6 +82,7 @@ def _call_once(model_name, api_key, key_label, prompt):
 
     try:
         data = response.json()
+        _usage["ok"] += 1
         return data["candidates"][0]["content"]["parts"][0]["text"].strip(), None
     except (KeyError, IndexError, ValueError) as e:
         print(f"  [Gemini] couldn't parse response from {model_name}: {e}")

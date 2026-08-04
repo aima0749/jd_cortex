@@ -7,9 +7,16 @@ repo from its own location, so it works from any folder on any machine,
 and starts the five processes in the order they actually depend on each
 other.
 
-    python run.py check     what's ready and what isn't - run this first
-    python run.py           start everything
-    python run.py --minimal ARC brain + witness memory only, no vision
+    python run.py check         what's ready and what isn't - run this first
+    python run.py               start everything
+    python run.py --no-ambient  everything except ambient mode
+    python run.py --minimal     ARC brain + witness memory only, no vision
+
+Ambient mode draws on the same daily Gemini pool as conversation, so if a
+busy scene drains it JD goes quiet - and an exhausted quota reads exactly
+like "nothing worth saying". Watch the gemini counter on the panel during
+a session; --no-ambient is there if you need the quota kept for answering
+questions.
 
 Each process gets its own console window, because main.py asks which
 input mode to use and the watchers print live status worth watching.
@@ -187,7 +194,7 @@ def spawn(title, script, cwd):
     return subprocess.Popen([PY, script], cwd=cwd, creationflags=flags)
 
 
-def start(minimal=False):
+def start(minimal=False, ambient=True):
     if not _port_open(ARC_HOST, ARC_PORT):
         print(f"ARC is not listening on {ARC_HOST}:{ARC_PORT}.")
         print("Open ARC, load the JD project, and add the TCP script server "
@@ -220,8 +227,12 @@ def start(minimal=False):
         print("Starting surveillance watcher...")
         procs.append(("surveillance", spawn("JD Surveillance",
                                             "surveillance_watcher.py", jrs)))
-        print("Starting ambient watcher...")
-        procs.append(("ambient", spawn("JD Ambient", "ambient_watcher.py", jrs)))
+        if ambient:
+            print("Starting ambient watcher...")
+            procs.append(("ambient", spawn("JD Ambient",
+                                           "ambient_watcher.py", jrs)))
+        else:
+            print("Ambient mode off (--no-ambient).")
 
     print(f"\n{len(procs)} process(es) running. Answer the input-mode prompt "
           f"in the JD Brain window.")
@@ -256,4 +267,6 @@ if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg == "check":
         sys.exit(check())
-    sys.exit(start(minimal=(arg == "--minimal")))
+    args = sys.argv[1:]
+    sys.exit(start(minimal=("--minimal" in args),
+                   ambient=("--no-ambient" not in args)))

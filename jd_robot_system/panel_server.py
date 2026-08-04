@@ -117,8 +117,13 @@ def _status_line():
         diary = _last_diary_line()
         if diary:
             event = diary
-    return ("STATUS person=%s | object=%s | event=%s | gesture=%s"
-            % (person, obj, event, gesture))
+    try:
+        import gemini_brain
+        quota = " | " + gemini_brain.usage_summary()
+    except Exception:
+        quota = ""      # the panel must never fail over a diagnostic
+    return ("STATUS person=%s | object=%s | event=%s | gesture=%s%s"
+            % (person, obj, event, gesture, quota))
 
 
 # ---------------------------------------------------------------------
