@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Net.Sockets;
@@ -13,25 +14,18 @@ namespace Memory
     {
 
         Configuration _config;
-        ARC.UCForms.FormCameraDevice _cameraControl;
-        Bitmap _latestFrame;
-        System.Timers.Timer _saveTimer;
-        System.Timers.Timer _readTimer;
-        bool _saving = false;
 
         // ---------- socket ----------
         const string MEMORY_HOST = "127.0.0.1";
         const int MEMORY_PORT = 5005;
         TcpClient _sock;
-        // Where Python and this plugin swap files. Asked from the
-        // Python side on connect; this is only the fallback for when
-        // the brain isn't up yet.
-        string _bridgeDir = @"D:\face_bridge";
         StreamReader _sockReader;
         StreamWriter _sockWriter;
         readonly object _sockLock = new object();
         System.Timers.Timer _statusTimer;
         System.Timers.Timer _connectTimer;
+        int _tick = 0;                    // diary refreshes every 2nd status poll
+        string _lastDiaryBlob = null;     // skip repainting an unchanged list
 
         // ---------- theme ----------
         static readonly Color BG_PANEL = Color.FromArgb(37, 47, 62);
@@ -47,19 +41,27 @@ namespace Memory
         const int W = 330;
 
         // ---------- controls ----------
-        Label _dot, _lblConn;
+        Label _dot, _lblConn, _lblQuota;
         Label _valPerson, _valObject, _valEvent;
-        TextBox _txtQuestion, _txtAnswer;
+        TextBox _txtQuestion, _txtLog;
         Button _btnMic, _btnGesture;
         Label _lblLegend;
+        ListBox _lstDiary, _lstAlerts;
+        Label _lblAlertCount;
+        string _lastAlertBlob = null;
         bool _gestureOn = false;
+        string _personName = "-";
 
-        static readonly string[] EXAMPLES = {
+        // "{person}" is filled in live from whoever the camera currently
+        // sees, so the panel visibly knows who it is looking at.
+        readonly string[] EXAMPLES = {
             "Who did you see?",
-            "What did person pick up?",
+            "What did {person} pick up?",
             "What happened?",
             "Wave at me",
         };
+        readonly List<KeyValuePair<Button, string>> _chips =
+            new List<KeyValuePair<Button, string>>();
 
         // Spelled out fully so a first-time user knows which finger and
         // direction, not just "point - turn".
@@ -93,28 +95,33 @@ namespace Memory
             this.Controls.Add(root);
             root.BringToFront();
 
-            // Two side-by-side columns, so the whole panel fits on screen
-            // without scrolling: seeing + asking on the left, doing on the
-            // right.
+            // Two side-by-side columns: seeing + talking on the left,
+            // gestures + the live diary on the right.
             FlowLayoutPanel colLeft = Col(root);
             FlowLayoutPanel colRight = Col(root);
 
-            // ---------- header ----------
-            FlowLayoutPanel head = Row(colLeft, 26);
-            Label title = Mk<Label>(head, 176, 20);
-            title.Text = "JD 2.0";
+            // ---------- header: name, connection, API budget ----------
+            Label title = Mk<Label>(colLeft, W, 20);
+            title.Text = "JD Cortex  -  Witness Memory";
             title.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
 
+            FlowLayoutPanel head = Row(colLeft, 18);
             _dot = new Label();
             _dot.Size = new Size(10, 10);
             _dot.BackColor = OFF_RED;
-            _dot.Margin = new Padding(6, 6, 6, 0);
+            _dot.Margin = new Padding(0, 4, 6, 0);
             head.Controls.Add(_dot);
 
-            _lblConn = Mk<Label>(head, 110, 20);
+            _lblConn = Mk<Label>(head, 158, 16);
             _lblConn.Text = "starting...";
             _lblConn.ForeColor = TXT_DIM;
             _lblConn.Font = new Font("Segoe UI", 8.5F);
+
+            _lblQuota = Mk<Label>(head, 150, 16);
+            _lblQuota.Text = "";
+            _lblQuota.ForeColor = TXT_DIM;
+            _lblQuota.Font = new Font("Segoe UI", 8.5F);
+            _lblQuota.TextAlign = ContentAlignment.TopRight;
 
             // ---------- what JD sees ----------
             Header(colLeft, "What JD sees right now");
@@ -135,22 +142,20 @@ namespace Memory
             // command-and-act system.
             Header(colLeft, "Ask JD, or tell it what to do");
 
-            FlowLayoutPanel chips = new FlowLayoutPanel();
-            chips.Size = new Size(W, 64);
-            chips.FlowDirection = FlowDirection.LeftToRight;
-            chips.WrapContents = true;
-            chips.Margin = new Padding(0, 0, 0, 6);
-            chips.BackColor = Color.Transparent;
-            colLeft.Controls.Add(chips);
+            FlowLayoutPanel chipRow = new FlowLayoutPanel();
+            chipRow.Size = new Size(W, 64);
+            chipRow.FlowDirection = FlowDirection.LeftToRight;
+            chipRow.WrapContents = true;
+            chipRow.Margin = new Padding(0, 0, 0, 6);
+            chipRow.BackColor = Color.Transparent;
+            colLeft.Controls.Add(chipRow);
 
-            foreach (string ex in EXAMPLES)
+            foreach (string template in EXAMPLES)
             {
-                string q = ex;                       // capture per iteration
                 Button chip = new Button();
-                chip.Text = q;
-                chip.AutoSize = false;
-                chip.Size = new Size(TextRenderer.MeasureText(q,
-                                new Font("Segoe UI", 8.5F)).Width + 18, 26);
+                chip.AutoSize = true;
+                chip.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                chip.Padding = new Padding(4, 1, 4, 1);
                 chip.BackColor = BG_CHIP;
                 chip.ForeColor = TXT_CHIP;
                 chip.FlatStyle = FlatStyle.Flat;
@@ -158,8 +163,10 @@ namespace Memory
                 chip.Font = new Font("Segoe UI", 8.5F);
                 chip.Margin = new Padding(0, 0, 4, 4);
                 chip.Cursor = Cursors.Hand;
-                chip.Click += (s, e) => AskThis(q);
-                chips.Controls.Add(chip);
+                chip.Text = FillPerson(template);
+                chip.Click += (s, e) => AskThis(((Button)s).Text);
+                chipRow.Controls.Add(chip);
+                _chips.Add(new KeyValuePair<Button, string>(chip, template));
             }
 
             FlowLayoutPanel askRow = Row(colLeft, 32);
@@ -189,17 +196,19 @@ namespace Memory
             _btnMic.MouseDown += (s, e) => MicDown();
             _btnMic.MouseUp += (s, e) => MicUp();
 
-            _txtAnswer = new TextBox();
-            _txtAnswer.Size = new Size(W, 62);
-            _txtAnswer.Multiline = true;
-            _txtAnswer.ReadOnly = true;
-            _txtAnswer.ScrollBars = ScrollBars.Vertical;
-            _txtAnswer.BackColor = BG_CARD;
-            _txtAnswer.ForeColor = TXT;
-            _txtAnswer.BorderStyle = BorderStyle.FixedSingle;
-            _txtAnswer.Font = new Font("Segoe UI", 9F);
-            _txtAnswer.Margin = new Padding(0, 0, 0, 6);
-            colLeft.Controls.Add(_txtAnswer);
+            // Conversation log, not a single-answer box: during a demo the
+            // history of what was asked and answered IS the story.
+            _txtLog = new TextBox();
+            _txtLog.Size = new Size(W, 96);
+            _txtLog.Multiline = true;
+            _txtLog.ReadOnly = true;
+            _txtLog.ScrollBars = ScrollBars.Vertical;
+            _txtLog.BackColor = BG_CARD;
+            _txtLog.ForeColor = TXT;
+            _txtLog.BorderStyle = BorderStyle.FixedSingle;
+            _txtLog.Font = new Font("Segoe UI", 8.5F);
+            _txtLog.Margin = new Padding(0, 0, 0, 6);
+            colLeft.Controls.Add(_txtLog);
 
             // ---------- gestures ----------
             Header(colRight, "Hand gesture control");
@@ -212,13 +221,61 @@ namespace Memory
             _lblLegend.Font = new Font("Segoe UI", 8F);
             _lblLegend.Margin = new Padding(4, 2, 0, 8);
 
-            // ---------- setup ----------
-            Header(colRight, "Setup");
-            Button btnAttach = Btn(colRight, "Attach to JD's camera", W, 26);
-            btnAttach.Font = new Font("Segoe UI", 8F);
-            btnAttach.Click += (s, e) => attach();
+            // ---------- surveillance ----------
+            // Deliberately "entries", not "people": the watcher keys off
+            // tracker ids and those get reassigned, so one visitor can
+            // produce several lines. Overstating this as a person count
+            // would be the panel lying.
+            FlowLayoutPanel alertHead = Row(colRight, 18);
+            Label alertTitle = Mk<Label>(alertHead, 210, 16);
+            alertTitle.Text = "Security log";
+            alertTitle.ForeColor = TXT_DIM;
+            alertTitle.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
+            alertHead.Margin = new Padding(0, 8, 0, 2);
 
-            Button btnStop = Btn(colRight, "Stop the vision loop", W, 26);
+            _lblAlertCount = Mk<Label>(alertHead, 118, 16);
+            _lblAlertCount.Text = "";
+            _lblAlertCount.ForeColor = TXT_DIM;
+            _lblAlertCount.Font = new Font("Segoe UI", 8F);
+            _lblAlertCount.TextAlign = ContentAlignment.TopRight;
+
+            _lstAlerts = new ListBox();
+            _lstAlerts.Size = new Size(W, 64);
+            _lstAlerts.BackColor = BG_CARD;
+            _lstAlerts.ForeColor = TXT;
+            _lstAlerts.BorderStyle = BorderStyle.FixedSingle;
+            _lstAlerts.Font = new Font("Consolas", 8.25F);
+            _lstAlerts.IntegralHeight = false;
+            _lstAlerts.SelectionMode = SelectionMode.None;
+            _lstAlerts.Margin = new Padding(0, 0, 0, 4);
+            _lstAlerts.Items.Add("(waiting for JD's brain)");
+            // Sensitive-object alerts are the ones worth spotting across
+            // a room, so they draw in red while routine sightings stay
+            // plain.
+            _lstAlerts.DrawMode = DrawMode.OwnerDrawFixed;
+            _lstAlerts.DrawItem += Alerts_DrawItem;
+            colRight.Controls.Add(_lstAlerts);
+
+            // ---------- the diary, live ----------
+            // This is the project: watching JD's memory fill in while
+            // someone walks past is the most demonstrable thing it does.
+            Header(colRight, "JD's memory today (live)");
+            _lstDiary = new ListBox();
+            _lstDiary.Size = new Size(W, 120);
+            _lstDiary.BackColor = BG_CARD;
+            _lstDiary.ForeColor = TXT;
+            _lstDiary.BorderStyle = BorderStyle.FixedSingle;
+            _lstDiary.Font = new Font("Consolas", 8.25F);
+            _lstDiary.IntegralHeight = false;
+            _lstDiary.SelectionMode = SelectionMode.None;
+            _lstDiary.Margin = new Padding(0, 0, 0, 8);
+            _lstDiary.Items.Add("(waiting for JD's brain)");
+            colRight.Controls.Add(_lstDiary);
+
+            // A judge WILL click any button out of curiosity, so the one
+            // destructive action is small, labeled for what it really
+            // does, and confirms first.
+            Button btnStop = Btn(colRight, "Shut down JD's brain", W, 24);
             btnStop.Font = new Font("Segoe UI", 8F);
             btnStop.ForeColor = OFF_RED;
             btnStop.Click += (s, e) => ConfirmStop();
@@ -237,14 +294,6 @@ namespace Memory
                 if (_sock == null || !_sock.Connected) MemoryConnect(true);
             };
             _connectTimer.Start();
-
-            _saveTimer = new System.Timers.Timer();
-            _saveTimer.Interval = 500;
-            _saveTimer.Elapsed += SaveTimer_Elapsed;
-
-            _readTimer = new System.Timers.Timer();
-            _readTimer.Interval = 500;
-            _readTimer.Elapsed += ReadTimer_Elapsed;
 
             PaintGesture();
         }
@@ -330,11 +379,44 @@ namespace Memory
             card.Controls.Add(val);
         }
 
+        string FillPerson(string template)
+        {
+            string name = _personName;
+            if (name == "-" || name == "") name = "the last person";
+            else if (name.Contains(",")) name = name.Split(',')[0].Trim();
+            return template.Replace("{person}", name);
+        }
+
         void PaintGesture()
         {
             _btnGesture.BackColor = _gestureOn ? BG_MIC : BG_BTN;
-            _btnGesture.Text = _gestureOn ? "Turn off hand control"
+            _btnGesture.Text = _gestureOn ? "Hand control ON  -  open hand stops"
                                           : "Turn on hand control";
+            // The legend lights up only while gestures actually do
+            // something, so it never suggests they work when off.
+            _lblLegend.ForeColor = _gestureOn ? TXT : TXT_DIM;
+        }
+
+        // Timestamped running log; the old single-answer box forgot each
+        // exchange as soon as the next one started.
+        void Log(string who, string text)
+        {
+            if (text == null || text.Trim() == "") return;
+            string line = DateTime.Now.ToString("HH:mm") + "  " + who + ": "
+                          + text.Trim();
+            UI(() =>
+            {
+                _txtLog.AppendText(line + "\r\n");
+                if (_txtLog.Lines.Length > 60)
+                {
+                    string[] lines = _txtLog.Lines;
+                    string[] keep = new string[40];
+                    Array.Copy(lines, lines.Length - 40, keep, 0, 40);
+                    _txtLog.Text = string.Join("\r\n", keep) + "\r\n";
+                }
+                _txtLog.SelectionStart = _txtLog.Text.Length;
+                _txtLog.ScrollToCaret();
+            });
         }
 
         // ---------- socket ----------
@@ -361,9 +443,10 @@ namespace Memory
                 }
             }
             SetConn(true, "Ready");
-            string dir = MemorySend("bridgedir");
-            if (dir != null && dir.StartsWith("OK: "))
-                _bridgeDir = dir.Substring(4).Trim();
+            _lastDiaryBlob = null;        // force a fresh paint of both lists
+            _lastAlertBlob = null;
+            RefreshDiary();
+            RefreshAlerts();
             _statusTimer.Start();
         }
 
@@ -397,13 +480,13 @@ namespace Memory
         // ---------- actions ----------
         void AskThis(string text)
         {
-            SetAnswer("Thinking...");
+            Log("You", text);
             Task.Run(() =>
             {
                 string reply = MemorySend(text);
                 if (reply == null) reply = "JD's brain isn't running yet.";
                 if (reply.StartsWith("OK: ")) reply = reply.Substring(4);
-                SetAnswer(reply);
+                Log("JD", reply);
             });
         }
 
@@ -411,6 +494,7 @@ namespace Memory
         {
             string q = _txtQuestion.Text.Trim();
             if (q == "") return;
+            UI(() => _txtQuestion.Text = "");
             AskThis(q);
         }
 
@@ -418,11 +502,10 @@ namespace Memory
         {
             if (_sock == null || !_sock.Connected)
             {
-                SetAnswer("JD's brain isn't running yet.");
+                Log("panel", "JD's brain isn't running yet.");
                 return;
             }
             UI(() => _btnMic.Text = "Listening... let go when done");
-            SetAnswer("Listening...");
             Task.Run(() => MemorySend("listen start"));
         }
 
@@ -434,7 +517,21 @@ namespace Memory
                 string reply = MemorySend("listen stop");
                 if (reply == null) reply = "JD's brain isn't running yet.";
                 if (reply.StartsWith("OK: ")) reply = reply.Substring(4);
-                SetAnswer(reply);
+
+                // The Python side answers:  "<heard>"  ->  <reply>
+                // Split it so the log shows what JD heard before what it
+                // said - if the transcript is wrong, the answer will be
+                // too, and this makes that visible.
+                int arrow = reply.IndexOf("\"  ->  ");
+                if (reply.StartsWith("\"") && arrow > 0)
+                {
+                    Log("You (voice)", reply.Substring(1, arrow - 1));
+                    Log("JD", reply.Substring(arrow + 7));
+                }
+                else
+                {
+                    Log("JD", reply);
+                }
                 UI(() => _btnMic.Text = "Hold to speak");
             });
         }
@@ -446,7 +543,9 @@ namespace Memory
                 string reply = MemorySend(on ? "gesture on" : "gesture off");
                 if (reply == null || reply.StartsWith("ERR") || reply.StartsWith("UNKNOWN"))
                 {
-                    SetAnswer("Hand control isn't available right now.");
+                    Log("panel", reply == null
+                        ? "Hand control isn't available right now."
+                        : reply);
                     return;
                 }
                 _gestureOn = on;
@@ -454,15 +553,14 @@ namespace Memory
             });
         }
 
-        // A judge WILL click this out of curiosity. Make them mean it - one
-        // stray click otherwise leaves JD brain-dead mid-demo, and the only
-        // way back is a terminal.
+        // One stray click otherwise leaves JD brain-dead mid-demo, and the
+        // only way back is a terminal.
         void ConfirmStop()
         {
             if (MessageBox.Show("This shuts down JD's brain. Everything on this "
                                 + "panel stops working until it's restarted from "
                                 + "the computer.\n\nAre you sure?",
-                                "Stop the vision loop?",
+                                "Shut down JD's brain?",
                                 MessageBoxButtons.YesNo,
                                 MessageBoxIcon.Warning) == DialogResult.Yes)
             {
@@ -481,17 +579,27 @@ namespace Memory
             }
             if (reply.StartsWith("STATUS ")) reply = reply.Substring(7);
             ApplyStatus(reply);
+
+            // The diary changes on a human timescale; every other poll is
+            // plenty and keeps this timer's work small.
+            if ((++_tick & 1) == 0) { RefreshDiary(); RefreshAlerts(); }
         }
 
-        // "person=X | object=Y | event=Z | gesture=on"
+        // "person=X | object=Y | event=Z | gesture=on | gemini 4/5 ok"
+        // Segments without '=' are extras like the API counter.
         void ApplyStatus(string s)
         {
             string person = "-", obj = "-", evt = "-", gest = "off";
+            string quota = null;
             foreach (string part in s.Split('|'))
             {
                 string t = part.Trim();
                 int eq = t.IndexOf('=');
-                if (eq < 0) continue;
+                if (eq < 0)
+                {
+                    if (t.StartsWith("gemini")) quota = t;
+                    continue;
+                }
                 string k = t.Substring(0, eq).Trim().ToLower();
                 string v = t.Substring(eq + 1).Trim();
                 if (k == "person") person = v;
@@ -500,13 +608,99 @@ namespace Memory
                 else if (k == "gesture") gest = v;
             }
             bool g = (gest == "on");
-            string p = person, o = obj, ev = evt;
+            string p = person, o = obj, ev = evt, qu = quota;
             UI(() =>
             {
                 _valPerson.Text = (p == "-") ? "nobody" : p;
                 _valObject.Text = (o == "-") ? "nothing" : o;
                 _valEvent.Text = ev;
+                if (qu != null)
+                {
+                    _lblQuota.Text = qu;
+                    // Anything but zero quota hits means a key/model pair
+                    // is already exhausted for the day, and the ladder is
+                    // eating into its spares. That is the one number here
+                    // worth catching your eye across a room.
+                    bool burning = qu.IndexOf("quota",
+                                       StringComparison.OrdinalIgnoreCase) >= 0;
+                    _lblQuota.ForeColor = burning ? OFF_RED : TXT_DIM;
+                    _lblQuota.Font = new Font("Segoe UI", 8.5F,
+                                        burning ? FontStyle.Bold : FontStyle.Regular);
+                }
+                if (p != _personName)
+                {
+                    _personName = p;
+                    foreach (var pair in _chips)
+                        pair.Key.Text = FillPerson(pair.Value);
+                }
                 if (g != _gestureOn) { _gestureOn = g; PaintGesture(); }
+            });
+        }
+
+        void RefreshDiary()
+        {
+            string reply = MemorySend("diary 8");
+            if (reply == null || !reply.StartsWith("DIARY ")) return;
+            string body = reply.Substring(6).Trim();
+            if (body == _lastDiaryBlob) return;
+            _lastDiaryBlob = body;
+
+            string[] items = (body == "-")
+                ? new string[] { "(nothing in the diary yet today)" }
+                : body.Split(new string[] { " ;; " }, StringSplitOptions.RemoveEmptyEntries);
+
+            UI(() =>
+            {
+                _lstDiary.Items.Clear();
+                foreach (string it in items) _lstDiary.Items.Add(it);
+                int vis = Math.Max(1, _lstDiary.ClientSize.Height
+                                      / Math.Max(1, _lstDiary.ItemHeight));
+                _lstDiary.TopIndex = Math.Max(0, _lstDiary.Items.Count - vis);
+            });
+        }
+
+        void Alerts_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0) return;
+            string text = _lstAlerts.Items[e.Index].ToString();
+            bool sensitive = text.IndexOf("SENSITIVE",
+                                 StringComparison.OrdinalIgnoreCase) >= 0;
+            e.DrawBackground();
+            using (SolidBrush b = new SolidBrush(sensitive ? OFF_RED : TXT))
+                e.Graphics.DrawString(text, e.Font, b, e.Bounds);
+        }
+
+        void RefreshAlerts()
+        {
+            string reply = MemorySend("alerts 4");
+            if (reply == null || !reply.StartsWith("ALERTS ")) return;
+            string body = reply.Substring(7).Trim();
+            if (body == _lastAlertBlob) return;
+            _lastAlertBlob = body;
+
+            string[] segs = body.Split(new string[] { " ;; " },
+                                       StringSplitOptions.RemoveEmptyEntries);
+            string count = "";
+            var rows = new List<string>();
+            foreach (string seg in segs)
+            {
+                if (seg.StartsWith("today="))
+                {
+                    string n = seg.Substring(6);
+                    count = n + (n == "1" ? " entry today" : " entries today");
+                }
+                else rows.Add(seg);
+            }
+            if (rows.Count == 0) rows.Add("(nothing flagged today)");
+
+            UI(() =>
+            {
+                _lblAlertCount.Text = count;
+                _lstAlerts.Items.Clear();
+                foreach (string r in rows) _lstAlerts.Items.Add(r);
+                int vis = Math.Max(1, _lstAlerts.ClientSize.Height
+                                      / Math.Max(1, _lstAlerts.ItemHeight));
+                _lstAlerts.TopIndex = Math.Max(0, _lstAlerts.Items.Count - vis);
             });
         }
 
@@ -522,13 +716,11 @@ namespace Memory
                     _valPerson.Text = "-";
                     _valObject.Text = "-";
                     _valEvent.Text = "-";
+                    _lblQuota.Text = "";
+                    _lblQuota.ForeColor = TXT_DIM;
+                    _lblAlertCount.Text = "";
                 }
             });
-        }
-
-        void SetAnswer(string text)
-        {
-            UI(() => _txtAnswer.Text = text);
         }
 
         void UI(Action a)
@@ -537,104 +729,8 @@ namespace Memory
             else a();
         }
 
-        // ---------- camera bridge (unchanged) ----------
-        void attach()
-        {
-
-            detach();
-
-            Control[] cameras = ARC.EZBManager.FormMain.GetControlByType(typeof(ARC.UCForms.FormCameraDevice));
-
-            if (cameras.Length == 0)
-            {
-                MessageBox.Show("There are no camera controls in this project. Add a Camera Device first.");
-                return;
-            }
-
-            _cameraControl = (ARC.UCForms.FormCameraDevice)cameras[0];
-            _cameraControl.Camera.OnNewFrame += Camera_OnNewFrame;
-            _saveTimer.Start();
-            _readTimer.Start();
-            ARC.EZBManager.Log("Attached to camera: {0}", _cameraControl.Text);
-        }
-
-        void detach()
-        {
-
-            _saveTimer.Stop();
-            _readTimer.Stop();
-            if (_cameraControl != null)
-            {
-                _cameraControl.Camera.OnNewFrame -= Camera_OnNewFrame;
-                _cameraControl = null;
-            }
-        }
-
-        void Camera_OnNewFrame()
-        {
-            if (_cameraControl == null) return;
-            _latestFrame = _cameraControl.Camera.GetCurrentBitmapManaged;
-        }
-
-        void SaveTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
-        {
-
-            if (_saving) return;
-            if (_latestFrame == null) return;
-
-            _saving = true;
-            try
-            {
-                // Write to a temp file, then swap it into place. The swap
-                // is instant, so Python can never read half a frame - the
-                // same atomic pattern every file in this project uses.
-                System.IO.Directory.CreateDirectory(_bridgeDir);
-                string dest = System.IO.Path.Combine(_bridgeDir, "frame.jpg");
-                string tmp = dest + ".tmp";
-                Bitmap copy = new Bitmap(_latestFrame);
-                copy.Save(tmp, System.Drawing.Imaging.ImageFormat.Jpeg);
-                copy.Dispose();
-                if (System.IO.File.Exists(dest))
-                    System.IO.File.Replace(tmp, dest, null);
-                else
-                    System.IO.File.Move(tmp, dest);
-            }
-            catch (Exception ex)
-            {
-                ARC.EZBManager.Log("Save error: " + ex.Message);
-            }
-            finally
-            {
-                _saving = false;
-            }
-        }
-
-        void ReadTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
-        {
-            try
-            {
-                string namePath = System.IO.Path.Combine(_bridgeDir, "name.txt");
-                if (System.IO.File.Exists(namePath))
-                {
-                    string name = System.IO.File.ReadAllText(namePath).Trim();
-                    ARC.Scripting.VariableManager.SetVariable("$FaceName", name);
-                }
-                string holdingPath = System.IO.Path.Combine(_bridgeDir, "holding.txt");
-                if (System.IO.File.Exists(holdingPath))
-                {
-                    string holding = System.IO.File.ReadAllText(holdingPath).Trim();
-                    ARC.Scripting.VariableManager.SetVariable("$Holding", holding);
-                }
-            }
-            catch (Exception ex)
-            {
-                ARC.EZBManager.Log("Read error: " + ex.Message);
-            }
-        }
-
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            detach();
             if (_statusTimer != null) _statusTimer.Stop();
             if (_connectTimer != null) _connectTimer.Stop();
             MemoryCloseSocket();

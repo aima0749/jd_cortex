@@ -53,3 +53,12 @@ bridge/
 
 # runtime output, not source - changes every session
 jd_robot_system/activity_log.txt
+
+# surveillance captures - photos of real people, and runtime output
+jd_robot_system/snapshots/
+
+# Visual Studio build output and private cache
+memory/plugin/obj/
+memory/plugin/bin/
+memory/plugin/.vs/
+jd_robot_system/snapshots/

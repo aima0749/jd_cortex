@@ -38,9 +38,21 @@ def get_scene_summary():
         return "No one is currently visible."
 
     lines = []
+    unknown_seen = 0
     for person_id, info in people.items():
         name = info.get("name")
-        label = name if name and name != "unknown" else person_id
+        if name and name != "unknown":
+            label = name
+        else:
+            # Never the track id. Ids are tracker slots, not people: the
+            # same visitor picks up a new one every time tracking drops
+            # and re-acquires, so "31" both means nothing to a listener
+            # and makes one person sound like several. The witness diary
+            # already pools unknowns for this reason; this keeps the live
+            # summary saying the same thing.
+            unknown_seen += 1
+            label = ("someone JD doesn't recognise" if unknown_seen == 1
+                     else "another person JD doesn't recognise")
         parts = [label]
         if info.get("posture"):
             parts.append(info["posture"])
