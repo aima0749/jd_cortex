@@ -7,6 +7,8 @@ limit by rotating through every configured API key before giving up on
 a model - so neither a deprecated model, a network blip, nor one
 exhausted key takes down the whole system mid-demo.
 """
+import re
+import time
 import time
 import requests
 from config import (
@@ -283,7 +285,7 @@ from the real categories and names given."""
                     name = name.strip().strip('"').strip("'")
                     category = category.strip().strip('"').strip("'").lower()
                     if category == "sound":
-                        name = int(name)
+                        name = int(re.search(r"\d+", name).group())
                     action = (category, name)
                 except (ValueError, IndexError):
                     action = None
